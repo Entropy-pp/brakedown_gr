@@ -106,9 +106,9 @@ bool test_full_pcs(long n, long k, long degree) {
     while (row_len * 2 <= n && row_len * 2 <= 256) row_len *= 2;
     long num_rows = n / row_len;
 
+    clock_t t = clock();
     BrakedownCodeGR code = brakedown_code_setup(row_len, k, degree);
 
-    clock_t t = clock();
     BrakedownCommitment comm = brakedown_commit(code, poly.data(), n, num_rows);
     double commit_time = double(clock() - t) / CLOCKS_PER_SEC;
 
@@ -207,8 +207,8 @@ void fair_benchmark(long k) {
          << "\n";
     cout << string(120, '-') << "\n";
 
-    long sizes[] = {4, 8, 16, 32, 64, 128, 256, 512, 1024};
-    for (int idx = 0; idx < 9; idx++) {
+    long sizes[] = {4, 8, 16, 32, 64, 128, 256, 512, 1024， 2048, 4096, 8192, 16384, 32768};
+    for (int idx = 0; idx < 14; idx++) {
         long n = sizes[idx];
         long degree = autoExtensionDegree(n);
 

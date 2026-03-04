@@ -116,10 +116,24 @@ inline long brakedown_codeword_len(
     std::vector<LevelDim> a, b;
     brakedown_dimensions(spec, log2_q, n, n_0, a, b);
     if (a.empty()) return iceil(n * spec.R);
-    long total = a[0].n; // first block: original message
-    for (size_t i = 0; i + 1 < a.size(); i++) total += a[i].m;
-    total += b.back().n; // RS part
+
+    // 与 brakedown_encode 的 assemble 布局完全对齐：
+    // [message] [inter[0]] ... [inter[L-2]] [inter[L-1]] [rs_output] [b_out[L-1]] ... [b_out[0]]
+
+    long total = a[0].n;  // message
+
+    // 所有 A 中间结果 (inter[0] .. inter[L-1])
+    for (size_t i = 0; i < a.size(); i++) total += a[i].m;
+
+    // RS 额外输出 (rs_output)，输入是最后一个 intermediate
+    long rs_input  = a.back().m;
+    long rs_output = iceil(rs_input * spec.R) - rs_input;
+    if (rs_output < 1) rs_output = 1;
+    total += rs_output;
+
+    // 所有 B 输出
     for (size_t i = 0; i < b.size(); i++) total += b[i].m;
+
     return total;
 }
 
@@ -127,7 +141,9 @@ inline long brakedown_num_proximity_testing(
     const BrakedownSpec& spec, long log2_q, long n, long n_0)
 {
     long cw_len = brakedown_codeword_len(spec, log2_q, n, n_0);
-    return iceil(spec.LAMBDA / ((double)log2_q - std::log2((double)cw_len)));
+    double denom = (double)log2_q - std::log2((double)cw_len);
+    assert(denom > 0.0 && "log2_q must be larger than log2(codeword_len)");
+    return iceil(spec.LAMBDA / denom);
 }
 
 // Pre-configured spec from GLSTW21 Figure 2 (Spec 6 — best for large fields)

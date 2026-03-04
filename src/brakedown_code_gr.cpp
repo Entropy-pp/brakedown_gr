@@ -13,6 +13,9 @@ using namespace NTL;
 static void reed_solomon_gr(const ZZ_pE* input, long input_len,
                             ZZ_pE* output, long output_len)
 {
+    // 确保求值点不会超出 exceptional set 大小（否则会重复）
+    assert(output_len < (1L << ZZ_pE::degree()));
+
     ZZ_pEX poly;
     for (long i = 0; i < input_len; i++) {
         SetCoeff(poly, i, input[i]);
