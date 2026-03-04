@@ -28,3 +28,16 @@ interpolate: | out
 
 out:
 	mkdir -p $(OUTDIR)
+
+# ============================================================
+# Brakedown over GR targets
+# ============================================================
+BRAKEDOWN_SRCS = src/gr.cpp src/sparse_matrix_gr.cpp src/brakedown_code_gr.cpp \
+                 src/merkle.cpp src/brakedown_pcs_gr.cpp
+
+brakedown_test: | out
+	g++ -O2 -std=c++11 -I./include test/brakedown_gr_test.cpp $(BRAKEDOWN_SRCS) \
+		-o $(OUTDIR)/brakedown_gr_test -pthread -lntl -lgmp -lm
+
+runbrakedown: brakedown_test
+	./$(OUTDIR)/brakedown_gr_test
