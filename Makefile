@@ -41,3 +41,24 @@ brakedown_test: | out
 
 runbrakedown: brakedown_test
 	./$(OUTDIR)/brakedown_gr_test
+
+# ============================================================
+# Fair Benchmark: 在同一进程中运行 Rinocchio + Brakedown
+# 使用矩阵乘法电路 (与原始 Rinocchio 一致)
+# ============================================================
+fair_benchmark: | out
+	g++ -O2 -std=c++11 -I./include test/fair_benchmark.cpp src/*.cpp \
+		-o $(OUTDIR)/fair_benchmark -pthread -lntl -lgmp -lm
+
+runfair: fair_benchmark
+	./$(OUTDIR)/fair_benchmark
+
+# ============================================================
+# Rinocchio-only benchmark (独立运行)
+# ============================================================
+bench_commitment: | out
+	g++ -O2 -std=c++11 -I./include test/bench_commitment.cpp src/*.cpp \
+		-o $(OUTDIR)/bench_commitment -pthread -lntl -lgmp -lm
+
+runbench: bench_commitment
+	./$(OUTDIR)/bench_commitment
