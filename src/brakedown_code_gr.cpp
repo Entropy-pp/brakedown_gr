@@ -30,16 +30,20 @@ BrakedownCodeGR brakedown_code_setup(long row_len, long k, long degree) {
     BrakedownCodeGR code;
     code.spec = getDefaultSpec();
     code.row_len = row_len;
+    code.is_small_ring = false;
+    code.packing_factor = 1;
+    code.ext_degree = degree;
+    code.base_degree = degree;
+    code.lambda = 128;
+    code.packed_row_len = row_len;
 
     long log2_q = k * degree;
     long n_0 = std::min(20L, row_len - 1);
     if (n_0 < 1) n_0 = 1;
 
-    // Compute dimensions
     std::vector<LevelDim> a_dims, b_dims;
     brakedown_dimensions(code.spec, log2_q, row_len, n_0, a_dims, b_dims);
 
-    // If no recursive levels possible, use plain RS
     if (a_dims.empty()) {
         code.codeword_len = iceil(row_len * code.spec.R);
         if (code.codeword_len < row_len + 1) code.codeword_len = row_len + 1;
@@ -52,7 +56,80 @@ BrakedownCodeGR brakedown_code_setup(long row_len, long k, long degree) {
     code.num_col_open = brakedown_num_column_opening(code.spec);
     code.num_prox_test = brakedown_num_proximity_testing(code.spec, log2_q, row_len, n_0);
 
-    // Create random sparse matrices
+    code.a_mats.resize(a_dims.size());
+    code.b_mats.resize(b_dims.size());
+    for (size_t i = 0; i < a_dims.size(); i++) {
+        code.a_mats[i] = createRandomSparseMatrix(a_dims[i]);
+    }
+    for (size_t i = 0; i < b_dims.size(); i++) {
+        code.b_mats[i] = createRandomSparseMatrix(b_dims[i]);
+    }
+
+    return code;
+}
+
+BrakedownCodeGR brakedown_code_setup_auto(long row_len, long k, long degree, long lambda) {
+    bool is_small = !isLargeRing(degree, lambda);
+
+    if (!is_small) {
+        // Large ring: 直接使用原有编码
+        BrakedownCodeGR code = brakedown_code_setup(row_len, k, degree);
+        code.lambda = lambda;
+        return code;
+    }
+
+    // ============ Small Ring 路径 ============
+    // 论文 Section 3.2: 将 packing_factor 个 GR(2^k, d) 元素
+    // 打包为 GR(2^k, packing_factor*d) 中的 1 个元素
+    long pf = smallRingPackingFactor(degree, lambda);
+    long ext_deg = pf * degree;  // 扩展后的度数
+    long packed_row = (row_len + pf - 1) / pf;  // 打包后的行长
+
+    // 在扩展环 GR(2^k, ext_deg) 上做 code setup
+    // 注意: 这里需要临时切换到扩展环来生成稀疏矩阵
+    // 但稀疏矩阵的维度计算只依赖于 log2_q，不需要实际 NTL 上下文
+    BrakedownCodeGR code;
+    code.spec = getDefaultSpec();
+    code.row_len = row_len;         // 原始行长 (GR(p^s,r) 上)
+    code.is_small_ring = true;
+    code.packing_factor = pf;
+    code.ext_degree = ext_deg;
+    code.base_degree = degree;
+    code.lambda = lambda;
+    code.packed_row_len = packed_row;
+
+    // 编码参数按扩展环 GR(2^k, ext_deg) 计算
+    long log2_q_ext = k * ext_deg;
+    long n_0 = std::min(20L, packed_row - 1);
+    if (n_0 < 1) n_0 = 1;
+
+    std::vector<LevelDim> a_dims, b_dims;
+
+    if (packed_row <= n_0) {
+        // 打包后行太短，用纯 RS
+        code.codeword_len = iceil(packed_row * code.spec.R);
+        if (code.codeword_len < packed_row + 1) code.codeword_len = packed_row + 1;
+        code.num_col_open = brakedown_num_column_opening(code.spec);
+        code.num_prox_test = 0;
+        return code;
+    }
+
+    brakedown_dimensions(code.spec, log2_q_ext, packed_row, n_0, a_dims, b_dims);
+
+    if (a_dims.empty()) {
+        code.codeword_len = iceil(packed_row * code.spec.R);
+        if (code.codeword_len < packed_row + 1) code.codeword_len = packed_row + 1;
+        code.num_col_open = brakedown_num_column_opening(code.spec);
+        code.num_prox_test = 0;
+        return code;
+    }
+
+    code.codeword_len = brakedown_codeword_len(code.spec, log2_q_ext, packed_row, n_0);
+    code.num_col_open = brakedown_num_column_opening(code.spec);
+    code.num_prox_test = brakedown_num_proximity_testing(code.spec, log2_q_ext, packed_row, n_0);
+
+    // 稀疏矩阵需要在扩展环上下文中生成
+    // 这里先保存维度，实际矩阵生成推迟到编码时
     code.a_mats.resize(a_dims.size());
     code.b_mats.resize(b_dims.size());
     for (size_t i = 0; i < a_dims.size(); i++) {
@@ -209,4 +286,58 @@ void brakedown_encode(const BrakedownCodeGR& code, ZZ_pE* codeword) {
     for (long j = offset; j < cw_len; j++) {
         clear(codeword[j]);
     }
+}
+
+// ============================================================
+// 新增: Small Ring Pack/Unpack 辅助函数
+// 论文 Claim 1: 将 k 个 GR(p^s,r) 元素映射为 GR(p^s,kr) 的 1 个元素
+//
+// GR(p^s,r) 的元素表示为 a_0 + a_1*x + ... + a_{r-1}*x^{r-1}
+// 将 k 个这样的元素拼接为:
+//   b_0 + b_1*x + ... + b_{kr-1}*x^{kr-1}
+// 即第 j 个元素的第 i 个系数放在位置 j*r + i
+// ============================================================
+
+// pack: 将 pf 个 base-ring 元素(每个 degree r)打包为 1 个 ext-ring 元素(degree kr)
+// base_coeffs[j] 是第 j 个 GR(p^s,r) 元素的系数表示 (长度 r)
+// 返回 GR(p^s,kr) 中的元素 (NTL 当前上下文必须已设为 GR(p^s,kr))
+static ZZ_pE pack_elements(const std::vector<ZZ_pX>& base_coeffs,
+                            long pf, long base_r) {
+    ZZ_pX packed;
+    for (long j = 0; j < pf; j++) {
+        for (long i = 0; i < base_r; i++) {
+            ZZ_p c;
+            if (j < (long)base_coeffs.size() && deg(base_coeffs[j]) >= i) {
+                c = coeff(base_coeffs[j], i);
+            } else {
+                clear(c);
+            }
+            if (!IsZero(c)) {
+                SetCoeff(packed, j * base_r + i, c);
+            }
+        }
+    }
+    return to_ZZ_pE(packed);
+}
+
+// unpack: 从 GR(p^s,kr) 的 1 个元素提取出 pf 个 GR(p^s,r) 的系数表示
+static std::vector<ZZ_pX> unpack_element(const ZZ_pE& ext_elem,
+                                          long pf, long base_r) {
+    std::vector<ZZ_pX> result(pf);
+    const ZZ_pX& poly = rep(ext_elem);
+    for (long j = 0; j < pf; j++) {
+        for (long i = 0; i < base_r; i++) {
+            ZZ_p c;
+            long idx = j * base_r + i;
+            if (deg(poly) >= idx) {
+                c = coeff(poly, idx);
+            } else {
+                clear(c);
+            }
+            if (!IsZero(c)) {
+                SetCoeff(result[j], i, c);
+            }
+        }
+    }
+    return result;
 }

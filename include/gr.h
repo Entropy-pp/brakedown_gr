@@ -22,4 +22,11 @@ ZZ_pE getInverse(ZZ_pE element);
 
 ZZ_pX primitiveIrredPoly(long degree);
 
+// ============================================================
+// 新增：判断当前 GR(2^k, d) 是否为 large ring
+// large ring: 2^d >= 2^lambda, 即 d >= lambda
+// ============================================================
+inline bool isLargeRing(long d, long lambda = 128) {
+    return d >= lambda;
+
 #endif

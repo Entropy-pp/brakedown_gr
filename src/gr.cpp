@@ -263,8 +263,97 @@ ZZ_pX primitiveIrredPoly(long degree) {
         SetCoeff(P, 27);
         SetCoeff(P, 75);
         break;
+    case 33: SetCoeff(P, 13); break;
+    case 34: SetCoeff(P, 3); SetCoeff(P, 4); SetCoeff(P, 8); break;
+    case 35: SetCoeff(P, 2); break;
+    case 36: SetCoeff(P, 11); break;
+    case 37: SetCoeff(P, 1); SetCoeff(P, 4); SetCoeff(P, 6); break;
+    case 38: SetCoeff(P, 1); SetCoeff(P, 5); SetCoeff(P, 6); break;
+    case 39: SetCoeff(P, 4); break;
+    case 40: SetCoeff(P, 23); SetCoeff(P, 27); SetCoeff(P, 29); break;
+    case 41: SetCoeff(P, 3); break;
+    case 42: SetCoeff(P, 3); SetCoeff(P, 4); SetCoeff(P, 7); break;
+    case 43: SetCoeff(P, 3); SetCoeff(P, 4); SetCoeff(P, 6); break;
+    case 44: SetCoeff(P, 2); SetCoeff(P, 5); SetCoeff(P, 6); break;
+    case 45: SetCoeff(P, 1); SetCoeff(P, 3); SetCoeff(P, 4); break;
+    case 46: SetCoeff(P, 6); SetCoeff(P, 7); SetCoeff(P, 8); break;
+    case 47: SetCoeff(P, 5); break;
+    case 48: SetCoeff(P, 4); SetCoeff(P, 7); SetCoeff(P, 9); break;
+    case 49: SetCoeff(P, 9); break;
+    case 50: SetCoeff(P, 2); SetCoeff(P, 3); SetCoeff(P, 4); break;
+    case 51: SetCoeff(P, 1); SetCoeff(P, 3); SetCoeff(P, 6); break;
+    case 52: SetCoeff(P, 3); break;
+    case 53: SetCoeff(P, 1); SetCoeff(P, 2); SetCoeff(P, 6); break;
+    case 54: SetCoeff(P, 3); SetCoeff(P, 6); SetCoeff(P, 8); break;
+    case 55: SetCoeff(P, 24); break;
+    case 56: SetCoeff(P, 2); SetCoeff(P, 4); SetCoeff(P, 7); break;
+    case 57: SetCoeff(P, 7); break;
+    case 58: SetCoeff(P, 19); break;
+    case 59: SetCoeff(P, 2); SetCoeff(P, 4); SetCoeff(P, 7); break;
+    case 60: SetCoeff(P, 1); break;
+    case 61: SetCoeff(P, 1); SetCoeff(P, 2); SetCoeff(P, 5); break;
+    case 62: SetCoeff(P, 3); SetCoeff(P, 5); SetCoeff(P, 6); break;
+    case 63: SetCoeff(P, 1); break;
+    case 64: SetCoeff(P, 1); SetCoeff(P, 3); SetCoeff(P, 4); break;
+    case 65: SetCoeff(P, 18); break;
+    case 66: SetCoeff(P, 6); SetCoeff(P, 8); SetCoeff(P, 9); break;
+    case 67: SetCoeff(P, 1); SetCoeff(P, 2); SetCoeff(P, 5); break;
+    case 68: SetCoeff(P, 9); break;
+    case 69: SetCoeff(P, 2); SetCoeff(P, 5); SetCoeff(P, 6); break;
+    case 70: SetCoeff(P, 1); SetCoeff(P, 3); SetCoeff(P, 5); break;
+    case 71: SetCoeff(P, 6); break;
+    case 72: SetCoeff(P, 3); SetCoeff(P, 9); SetCoeff(P, 10); break;
+    case 73: SetCoeff(P, 25); break;
+    case 74: SetCoeff(P, 3); SetCoeff(P, 4); SetCoeff(P, 7); break;
+    case 75: SetCoeff(P, 1); SetCoeff(P, 3); SetCoeff(P, 6); break;
+    case 76: SetCoeff(P, 2); SetCoeff(P, 4); SetCoeff(P, 5); break;
+    case 77: SetCoeff(P, 2); SetCoeff(P, 5); SetCoeff(P, 6); break;
+    case 78: SetCoeff(P, 1); SetCoeff(P, 2); SetCoeff(P, 7); break;
+    case 79: SetCoeff(P, 9); break;
+    case 80: SetCoeff(P, 17); SetCoeff(P, 27); SetCoeff(P, 75); break;
+    case 81: SetCoeff(P, 4); break;
+    case 82: SetCoeff(P, 4); SetCoeff(P, 6); SetCoeff(P, 9); break;
+    case 83: SetCoeff(P, 2); SetCoeff(P, 4); SetCoeff(P, 7); break;
+    case 84: SetCoeff(P, 13); break;
+    case 85: SetCoeff(P, 1); SetCoeff(P, 2); SetCoeff(P, 8); break;
+    case 86: SetCoeff(P, 2); SetCoeff(P, 5); SetCoeff(P, 6); break;
+    case 87: SetCoeff(P, 13); break;
+    case 88: SetCoeff(P, 8); SetCoeff(P, 9); SetCoeff(P, 11); break;
+    case 89: SetCoeff(P, 38); break;
+    case 90: SetCoeff(P, 2); SetCoeff(P, 3); SetCoeff(P, 5); break;
+    case 91: SetCoeff(P, 1); SetCoeff(P, 5); SetCoeff(P, 8); break;
+    case 92: SetCoeff(P, 2); SetCoeff(P, 5); SetCoeff(P, 6); break;
+    case 93: SetCoeff(P, 2); break;
+    case 94: SetCoeff(P, 21); break;
+    case 95: SetCoeff(P, 11); break;
+    case 96: SetCoeff(P, 6); SetCoeff(P, 9); SetCoeff(P, 10); break;
+    case 97: SetCoeff(P, 6); break;
+    case 98: SetCoeff(P, 11); break;
+    case 99: SetCoeff(P, 4); SetCoeff(P, 5); SetCoeff(P, 7); break;
+    case 100: SetCoeff(P, 37); break;
+    // ======== Large ring 关键度数 (λ=128, 256) ========
+    case 128:
+        // x^128 + x^7 + x^2 + x^1 + 1
+        SetCoeff(P, 1); SetCoeff(P, 2); SetCoeff(P, 7);
+        break;
+    case 160:
+        // x^160 + x^5 + x^3 + x^2 + 1
+        SetCoeff(P, 2); SetCoeff(P, 3); SetCoeff(P, 5);
+        break;
+    case 192:
+        // x^192 + x^7 + x^2 + x^1 + 1
+        SetCoeff(P, 1); SetCoeff(P, 2); SetCoeff(P, 7);
+        break;
+    case 256:
+        // x^256 + x^10 + x^5 + x^2 + 1
+        SetCoeff(P, 2); SetCoeff(P, 5); SetCoeff(P, 10);
+        break;
+
     default:
-        std::cout << "Unsupported extension degree: " << degree << std::endl;
+        // ======== Fallback: 使用 NTL 动态生成不可约多项式 ========
+        std::cout << "Degree " << degree << " not in hardcoded table, "
+                  << "using NTL BuildIrred to generate irreducible polynomial...\n";
+        BuildIrred(P, degree);  // NTL 内置：生成 degree 次不可约多项式
         break;
     }
     return P;

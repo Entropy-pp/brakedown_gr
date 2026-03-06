@@ -5,6 +5,7 @@
  *   - Rinocchio: 使用 n×n×n 矩阵乘法电路（与原始 rinocchio_test.cpp 一致）
  *   - Brakedown: 对相同规模的多项式做 Commit/Prove/Verify
  *   - 两者在同一进程中运行，使用相同的 GR 参数，计时公平
+ *   - 每个规模运行 NUM_TRIALS 次取平均值，数据更客观
  *
  * 编译:
  *   g++ -O2 -std=c++11 -I./include test/fair_benchmark.cpp src/*.cpp \
@@ -44,6 +45,11 @@ using namespace std;
 using namespace NTL;
 
 // ============================================================
+//  每个规模的运行次数（取平均值）
+// ============================================================
+static const int NUM_TRIALS = 10;
+
+// ============================================================
 //  初始化 GR(2^k, d)
 // ============================================================
 void initGR(long k, long degree) {
@@ -76,7 +82,7 @@ long autoExtensionDegree(long numMultGates) {
 }
 
 // ============================================================
-//  构造 n×n×n 矩阵乘法电路（与 bench_commitment.cpp 一致）
+//  构造 n×n×n 矩阵乘法电路
 //  C[i][j] = Σ_k A[i][k] * B[k][j]
 //  乘法门数 = n^3
 //  这是 Rinocchio 原始 benchmark 使用的电路
@@ -85,7 +91,7 @@ Circuit buildMatrixMultCircuit(int n) {
     Circuit c;
     long numInput = 2 * n * n;
     long numOutput = n * n;
-    long numMultGates = (long)n * n * n;
+    long numMultGates = n * n * n;
     long numMid = numMultGates - numOutput;
     long numWires = numInput + numMid + numOutput;
 
@@ -96,8 +102,8 @@ Circuit buildMatrixMultCircuit(int n) {
     c.numberOfMultiplicationGates = numMultGates;
 
     long midStart = numInput;
-    c.gates.resize(numMultGates);
 
+    c.gates.resize(numMultGates);
     int gateIdx = 0;
     for (int i = 0; i < n; i++) {
         for (int j = 0; j < n; j++) {
@@ -116,7 +122,6 @@ Circuit buildMatrixMultCircuit(int n) {
                     sort(g.leftInputs.begin(), g.leftInputs.end());
                     g.rightInputs.push_back(rightB);
                 }
-
                 c.gates[gateIdx] = g;
                 gateIdx++;
             }
@@ -147,22 +152,22 @@ RinocchioResult benchRinocchio(const Circuit& circuit, long k) {
 
     initGR(k, degree);
 
-    // QRP construction
+    // QRP
     clock_t t = clock();
     QRP qrp = getQRP(circuit, k, degree);
     r.qrpTime = double(clock() - t) / CLOCKS_PER_SEC;
 
-    // Trusted setup
+    // Setup
     t = clock();
     SecretState secret = setup(qrp, 512, 64);
     r.setupTime = double(clock() - t) / CLOCKS_PER_SEC;
 
-    // CRS generation
+    // CRS
     t = clock();
     CRS crs = getCRS(qrp, secret);
     r.crsTime = double(clock() - t) / CLOCKS_PER_SEC;
 
-    // Prepare input & evaluate circuit
+    // Eval
     Vec<ZZ_p> input;
     input.SetLength(circuit.numberOfInputWires);
     for (long i = 0; i < circuit.numberOfInputWires; i++) {
@@ -257,6 +262,55 @@ BrakedownResult benchBrakedown(long n, long k, long degree) {
 }
 
 // ============================================================
+//  对多次运行的 RinocchioResult 取平均值
+// ============================================================
+RinocchioResult averageRinocchio(const vector<RinocchioResult>& trials) {
+    RinocchioResult avg;
+    avg.numMultGates = trials[0].numMultGates;
+    avg.degree = trials[0].degree;
+    avg.qrpTime = avg.setupTime = avg.crsTime = 0;
+    avg.computeHTime = avg.proveTime = avg.verifyTime = 0;
+    for (const auto& t : trials) {
+        avg.qrpTime      += t.qrpTime;
+        avg.setupTime    += t.setupTime;
+        avg.crsTime      += t.crsTime;
+        avg.computeHTime += t.computeHTime;
+        avg.proveTime    += t.proveTime;
+        avg.verifyTime   += t.verifyTime;
+    }
+    double n = (double)trials.size();
+    avg.qrpTime      /= n;
+    avg.setupTime    /= n;
+    avg.crsTime      /= n;
+    avg.computeHTime /= n;
+    avg.proveTime    /= n;
+    avg.verifyTime   /= n;
+    return avg;
+}
+
+// ============================================================
+//  对多次运行的 BrakedownResult 取平均值
+// ============================================================
+BrakedownResult averageBrakedown(const vector<BrakedownResult>& trials) {
+    BrakedownResult avg;
+    avg.n = trials[0].n;
+    avg.degree = trials[0].degree;
+    avg.setupTime = avg.commitTime = avg.proveTime = avg.verifyTime = 0;
+    for (const auto& t : trials) {
+        avg.setupTime  += t.setupTime;
+        avg.commitTime += t.commitTime;
+        avg.proveTime  += t.proveTime;
+        avg.verifyTime += t.verifyTime;
+    }
+    double n = (double)trials.size();
+    avg.setupTime  /= n;
+    avg.commitTime /= n;
+    avg.proveTime  /= n;
+    avg.verifyTime /= n;
+    return avg;
+}
+
+// ============================================================
 //  打印分隔线
 // ============================================================
 void printSep(int width = 140) {
@@ -273,18 +327,19 @@ int main() {
     cout << "  Fair Benchmark: Brakedown PCS vs Rinocchio\n";
     cout << "  Circuit: n×n×n matrix multiplication (same as original Rinocchio)\n";
     cout << "  Both schemes run in the SAME process with SAME GR parameters\n";
+    cout << "  Each size runs " << NUM_TRIALS << " times, results are averaged\n";
     cout << "##############################################################\n\n";
 
-    // 矩阵大小序列: n=2..10 对应乘法门数 8..1000
-    // 你可以根据机器性能调整上界
+    // 矩阵大小序列: n=2..8 对应乘法门数 8..512
     int matSizes[] = {2, 3, 4, 5, 6, 7, 8};
     int numTests = sizeof(matSizes) / sizeof(matSizes[0]);
 
     // ============================================================
-    //  Phase 1: 逐个运行 Rinocchio (矩阵乘法电路)
+    //  Phase 1: 逐个运行 Rinocchio (矩阵乘法电路), 每个规模 NUM_TRIALS 次
     // ============================================================
     cout << ">>> Phase 1: Running Rinocchio on matrix multiplication circuits <<<\n";
-    cout << "\n";
+    cout << "    (" << NUM_TRIALS << " trials per size, showing averages)\n\n";
+
     cout << left
          << setw(6)  << "MatN"
          << setw(8)  << "Gates"
@@ -303,13 +358,19 @@ int main() {
     for (int ti = 0; ti < numTests; ti++) {
         int matN = matSizes[ti];
         long numGates = (long)matN * matN * matN;
+
         cout << "  Building " << matN << "x" << matN << "x" << matN
              << " circuit (gates=" << numGates << ")..." << flush;
 
         Circuit c = buildMatrixMultCircuit(matN);
-        cout << " running Rinocchio..." << flush;
 
-        RinocchioResult rr = benchRinocchio(c, k);
+        cout << " running Rinocchio x" << NUM_TRIALS << "..." << flush;
+
+        vector<RinocchioResult> trials(NUM_TRIALS);
+        for (int trial = 0; trial < NUM_TRIALS; trial++) {
+            trials[trial] = benchRinocchio(c, k);
+        }
+        RinocchioResult rr = averageRinocchio(trials);
         rResults.push_back(rr);
 
         double proverTotal = rr.computeHTime + rr.proveTime;
@@ -329,13 +390,15 @@ int main() {
              << "\n";
     }
     printSep(103);
-    cout << "  * Prover = ComputeH + Prove (fair prover total)\n\n";
+    cout << "  * Prover = ComputeH + Prove (fair prover total)\n";
+    cout << "  * All values are averages over " << NUM_TRIALS << " runs\n\n";
 
     // ============================================================
-    //  Phase 2: 逐个运行 Brakedown (相同多项式规模)
+    //  Phase 2: 逐个运行 Brakedown (相同多项式规模), 每个规模 NUM_TRIALS 次
     // ============================================================
     cout << ">>> Phase 2: Running Brakedown on same polynomial sizes <<<\n";
-    cout << "\n";
+    cout << "    (" << NUM_TRIALS << " trials per size, showing averages)\n\n";
+
     cout << left
          << setw(6)  << "MatN"
          << setw(8)  << "n"
@@ -354,9 +417,14 @@ int main() {
         long numGates = (long)matN * matN * matN;
         long degree = autoExtensionDegree(numGates);
 
-        cout << "  Brakedown n=" << numGates << " d=" << degree << "..." << flush;
+        cout << "  Brakedown n=" << numGates << " d=" << degree
+             << " x" << NUM_TRIALS << "..." << flush;
 
-        BrakedownResult br = benchBrakedown(numGates, k, degree);
+        vector<BrakedownResult> trials(NUM_TRIALS);
+        for (int trial = 0; trial < NUM_TRIALS; trial++) {
+            trials[trial] = benchBrakedown(numGates, k, degree);
+        }
+        BrakedownResult br = averageBrakedown(trials);
         bResults.push_back(br);
 
         double proverTotal = br.setupTime + br.commitTime + br.proveTime;
@@ -374,12 +442,14 @@ int main() {
              << "\n";
     }
     printSep(73);
-    cout << "  * Prover = CodeSetup + Commit + Prove\n\n";
+    cout << "  * Prover = CodeSetup + Commit + Prove\n";
+    cout << "  * All values are averages over " << NUM_TRIALS << " runs\n\n";
 
     // ============================================================
     //  Phase 3: 对比表格
     // ============================================================
-    cout << ">>> Phase 3: Head-to-head comparison <<<\n\n";
+    cout << ">>> Phase 3: Head-to-head comparison (averaged over "
+         << NUM_TRIALS << " runs) <<<\n\n";
 
     cout << left
          << setw(6)  << "MatN"
@@ -430,6 +500,7 @@ int main() {
 
     cout << "\n";
     cout << "  注释:\n";
+    cout << "    所有数据均为 " << NUM_TRIALS << " 次运行的平均值\n";
     cout << "    R.Setup†  = Rinocchio 可信设置 (一次性, Brakedown 无需)\n";
     cout << "    R.Prover  = ComputeH + Prove (多项式除法 + 同态加密)\n";
     cout << "    B.Prover  = Prove (稀疏矩阵编码 + Merkle 哈希)\n";
@@ -440,7 +511,7 @@ int main() {
     cout << "  因为它是电路编译步骤, 不属于多项式承诺操作.\n";
 
     cout << "\n##############################################################\n";
-    cout << "  Fair benchmark complete.\n";
+    cout << "  Benchmark complete.\n";
     cout << "##############################################################\n";
 
     return 0;

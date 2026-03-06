@@ -84,7 +84,6 @@ BrakedownEvalProof brakedown_prove(
     long row_len  = code.row_len;
     long num_rows = comm.num_rows;
 
-    // Helper: linear combination of polynomial rows using coefficients
     auto combine_rows = [&](const std::vector<ZZ_pE>& coeffs) {
         std::vector<ZZ_pE> result(row_len);
         for (long j = 0; j < row_len; j++) clear(result[j]);
@@ -99,19 +98,35 @@ BrakedownEvalProof brakedown_prove(
         return result;
     };
 
-    // FIX: When num_rows == 1, skip proximity testing (matches Rust code)
     long num_prox = (num_rows > 1) ? code.num_prox_test : 0;
+
+    // ============ Small Ring: 增加重复次数 ============
+    // 论文: Verifier 从 GR(p^s,r) 选 challenge，重复 ceil(λ/r) 次
+    if (code.is_small_ring && num_rows > 1) {
+        long repetitions = (code.lambda + code.base_degree - 1) / code.base_degree;
+        num_prox = std::max(num_prox, repetitions);
+    }
 
     proof.prox_coeffs.resize(num_prox);
     for (long t = 0; t < num_prox; t++) {
         proof.prox_coeffs[t].resize(num_rows);
         for (long i = 0; i < num_rows; i++) {
-            proof.prox_coeffs[t][i] = randomInvertible();
+            if (code.is_small_ring) {
+                // Small ring: challenge 来自 GR(p^s,r) 的 exceptional set
+                // 确保 a_i - a_j 可逆 (exceptional set 性质)
+                proof.prox_coeffs[t][i] = randomInExceptionalSet();
+                // 但需要非零
+                while (IsZero(proof.prox_coeffs[t][i]))
+                    proof.prox_coeffs[t][i] = randomInExceptionalSet();
+            } else {
+                // Large ring: 从 R* 中随机选
+                proof.prox_coeffs[t][i] = randomInvertible();
+            }
         }
         proof.combined_rows.push_back(combine_rows(proof.prox_coeffs[t]));
     }
 
-    // Evaluation consistency: combine with q1
+    // Evaluation consistency: combine with q1 (不变)
     auto q1_combined = combine_rows(q1);
     proof.eval_value = inner_product_gr(q1_combined, q2);
     proof.combined_rows.push_back(q1_combined);
