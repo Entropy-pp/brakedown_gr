@@ -1,6 +1,7 @@
 #include <NTL/ZZ_pE.h>
 #include <NTL/ZZ_pEX.h>
 #include <NTL/ZZX.h>
+#include <NTL/ZZ_pXFactoring.h>
 
 using namespace NTL;
 
@@ -270,7 +271,7 @@ ZZ_pX primitiveIrredPoly(long degree) {
     case 37: SetCoeff(P, 1); SetCoeff(P, 4); SetCoeff(P, 6); break;
     case 38: SetCoeff(P, 1); SetCoeff(P, 5); SetCoeff(P, 6); break;
     case 39: SetCoeff(P, 4); break;
-    case 40: SetCoeff(P, 23); SetCoeff(P, 27); SetCoeff(P, 29); break;
+
     case 41: SetCoeff(P, 3); break;
     case 42: SetCoeff(P, 3); SetCoeff(P, 4); SetCoeff(P, 7); break;
     case 43: SetCoeff(P, 3); SetCoeff(P, 4); SetCoeff(P, 6); break;
@@ -290,7 +291,7 @@ ZZ_pX primitiveIrredPoly(long degree) {
     case 57: SetCoeff(P, 7); break;
     case 58: SetCoeff(P, 19); break;
     case 59: SetCoeff(P, 2); SetCoeff(P, 4); SetCoeff(P, 7); break;
-    case 60: SetCoeff(P, 1); break;
+
     case 61: SetCoeff(P, 1); SetCoeff(P, 2); SetCoeff(P, 5); break;
     case 62: SetCoeff(P, 3); SetCoeff(P, 5); SetCoeff(P, 6); break;
     case 63: SetCoeff(P, 1); break;
@@ -310,7 +311,7 @@ ZZ_pX primitiveIrredPoly(long degree) {
     case 77: SetCoeff(P, 2); SetCoeff(P, 5); SetCoeff(P, 6); break;
     case 78: SetCoeff(P, 1); SetCoeff(P, 2); SetCoeff(P, 7); break;
     case 79: SetCoeff(P, 9); break;
-    case 80: SetCoeff(P, 17); SetCoeff(P, 27); SetCoeff(P, 75); break;
+
     case 81: SetCoeff(P, 4); break;
     case 82: SetCoeff(P, 4); SetCoeff(P, 6); SetCoeff(P, 9); break;
     case 83: SetCoeff(P, 2); SetCoeff(P, 4); SetCoeff(P, 7); break;

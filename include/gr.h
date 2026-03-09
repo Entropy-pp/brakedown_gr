@@ -28,5 +28,11 @@ ZZ_pX primitiveIrredPoly(long degree);
 // ============================================================
 inline bool isLargeRing(long d, long lambda = 128) {
     return d >= lambda;
+}
+
+inline long smallRingPackingFactor(long d, long lambda = 128) {
+    if (d >= lambda) return 1;
+    return (lambda + d - 1) / d;
+}
 
 #endif

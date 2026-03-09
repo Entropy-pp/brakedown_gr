@@ -40,7 +40,7 @@ BrakedownCodeGR brakedown_code_setup_auto(long row_len, long k, long degree, lon
 // codeword must have length = code.codeword_len
 void brakedown_encode(const BrakedownCodeGR& code, ZZ_pE* codeword);
 
-/ 新增: Small ring 编码 (Algorithm 2: Enc')
+// 新增: Small ring 编码 (Algorithm 2: Enc')
 // 输入: kn 个 GR(p^s,r) 元素
 // 输出: 在 GR(p^s,kr) 上编码后的 tn 个元素
 // 注意: 调用前需要先切换 NTL context 到 GR(p^s,kr)

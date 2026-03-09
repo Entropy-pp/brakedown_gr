@@ -62,3 +62,13 @@ bench_commitment: | out
 
 runbench: bench_commitment
 	./$(OUTDIR)/bench_commitment
+
+# ============================================================
+# Brakedown PCS Benchmark (独立性能测试)
+# ============================================================
+bench_pcs: | out
+	g++ -O2 -std=c++11 -I./include test/bench_pcs.cpp $(BRAKEDOWN_SRCS) \
+		-o $(OUTDIR)/bench_pcs -pthread -lntl -lgmp -lm
+
+runbenchpcs: bench_pcs
+	./$(OUTDIR)/bench_pcs
