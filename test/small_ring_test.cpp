@@ -109,16 +109,62 @@ void test_small_ring_pcs() {
         }
     }
 
-    // 直接计算期望值
+        // 直接计算期望值: 必须和 Prove/Verify 一致
+    // 先 pack 每行到 ext ring, 在 ext ring 做 q1 线性组合, unpack 回 base ring, 再和 q2 内积
     ZZ_pE expected_eval;
-    clear(expected_eval);
-    for (long i = 0; i < num_rows; i++) {
-        ZZ_pE row_dot;
-        clear(row_dot);
-        for (long j = 0; j < row_len; j++) {
-            row_dot += poly[i * row_len + j] * q2[j];
+    {
+        long pf_val = code.packing_factor;
+        long base_r_val = code.base_degree;
+        long packed_len = code.packed_row_len;
+
+        // 提取所有行的 ZZ_pX (在 base ring context)
+        switch_ring(base_r);
+        std::vector<std::vector<ZZ_pX>> all_row_polys(num_rows);
+        for (long i = 0; i < num_rows; i++) {
+            all_row_polys[i].resize(row_len);
+            for (long j = 0; j < row_len; j++) {
+                all_row_polys[i][j] = rep(poly[i * row_len + j]);
+            }
         }
-        expected_eval += q1[i] * row_dot;
+        std::vector<ZZ_pX> q1_polys(num_rows);
+        for (long i = 0; i < num_rows; i++) {
+            q1_polys[i] = rep(q1[i]);
+        }
+
+        // 切到 ext ring, pack 每行, 做 q1 线性组合
+        switch_ring(ext_r);
+        std::vector<ZZ_pE> combined(packed_len);
+        for (long j = 0; j < packed_len; j++) clear(combined[j]);
+
+        for (long i = 0; i < num_rows; i++) {
+            // pack 第 i 行
+            std::vector<ZZ_pX> group(pf_val);
+            ZZ_pE c_ext = to_ZZ_pE(q1_polys[i]);
+            for (long j = 0; j < packed_len; j++) {
+                for (long t = 0; t < pf_val; t++) {
+                    long src = j * pf_val + t;
+                    group[t] = (src < row_len) ? all_row_polys[i][src] : ZZ_pX();
+                }
+                ZZ_pE packed_elem = pack_elements_pub(group, pf_val, base_r_val);
+                combined[j] += c_ext * packed_elem;
+            }
+        }
+
+        // unpack combined, 切回 base ring, 和 q2 内积
+        std::vector<ZZ_pX> unpacked;
+        for (long j = 0; j < packed_len; j++) {
+            auto parts = unpack_element_pub(combined[j], pf_val, base_r_val);
+            for (long t = 0; t < pf_val; t++) {
+                unpacked.push_back(parts[t]);
+            }
+        }
+
+        switch_ring(base_r);
+        clear(expected_eval);
+        for (long j = 0; j < row_len; j++) {
+            ZZ_pE elem = to_ZZ_pE(unpacked[j]);
+            expected_eval += elem * q2[j];
+        }
     }
     cout << "Expected eval computed." << endl;
 

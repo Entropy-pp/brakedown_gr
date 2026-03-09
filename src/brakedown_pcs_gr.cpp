@@ -245,24 +245,6 @@ BrakedownEvalProof brakedown_prove(
             q1_polys[i] = rep(q1[i]);
         }
 
-        // 计算 eval_value: 先在 base ring 做 q1^T * S * q2
-        // 这里的乘法是 base ring 乘法, 没问题因为 eval_value 只和评估一致性有关
-        {
-            ZZ_pE eval_result;
-            clear(eval_result);
-            for (long i = 0; i < num_rows; i++) {
-                ZZ_pE row_dot;
-                clear(row_dot);
-                for (long j = 0; j < row_len; j++) {
-                    long idx = i * row_len + j;
-                    ZZ_pE val;
-                    if (idx < n) val = poly_coeffs[idx]; else clear(val);
-                    row_dot += q2[j] * val;
-                }
-                eval_result += q1[i] * row_dot;
-            }
-            proof.eval_value = eval_result;
-        }
 
         // Step 4: 切到 ext ring, 做 combine_packed_rows
         switch_to_ext_ring(code.ext_degree);
@@ -284,6 +266,31 @@ BrakedownEvalProof brakedown_prove(
         }
         // q1 的 combined packed row
         proof.combined_rows.push_back(combine_packed(q1_polys));
+
+        // ★ 计算 eval_value: 从 combined_rows.back() unpack 后和 q2 内积
+        //    必须和 Verify 的计算方式完全一致!
+        {
+            const auto& q1_packed = proof.combined_rows.back();
+
+            // 在 ext ring context 下 unpack
+            std::vector<ZZ_pX> unpacked_polys;
+            for (long j = 0; j < packed_len; j++) {
+                auto parts = unpack_element_pub(q1_packed[j], pf, base_r);
+                for (long t = 0; t < pf; t++) {
+                    unpacked_polys.push_back(parts[t]);
+                }
+            }
+
+            // 切到 base ring, 和 q2 做内积
+            switch_to_base_ring(code.base_degree);
+            ZZ_pE eval_result;
+            clear(eval_result);
+            for (long j = 0; j < row_len; j++) {
+                ZZ_pE elem = to_ZZ_pE(unpacked_polys[j]);
+                eval_result += elem * q2[j];
+            }
+            proof.eval_value = eval_result;
+        }
     }
 
     // Column openings (在 ext ring context 下)
