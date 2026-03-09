@@ -72,3 +72,13 @@ bench_pcs: | out
 
 runbenchpcs: bench_pcs
 	./$(OUTDIR)/bench_pcs
+
+# ============================================================
+# Small Ring PCS Test
+# ============================================================
+small_ring_test: | out
+	g++ -O2 -std=c++11 -I./include test/small_ring_test.cpp $(BRAKEDOWN_SRCS) \
+		-o $(OUTDIR)/small_ring_test -pthread -lntl -lgmp -lm
+
+runsmallring: small_ring_test
+	./$(OUTDIR)/small_ring_test
