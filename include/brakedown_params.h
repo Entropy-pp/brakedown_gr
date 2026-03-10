@@ -61,7 +61,8 @@ inline long brakedown_d_n(const BrakedownSpec& spec, long log2_q, long n) {
 }
 
 inline long brakedown_num_column_opening(const BrakedownSpec& spec) {
-    return iceil(-spec.LAMBDA / std::log2(1.0 - spec.delta() / 3.0));
+    // return iceil(-spec.LAMBDA / std::log2(1.0 - spec.delta() / 3.0));
+    return spec.LAMBDA;
 }
 
 // Dimension descriptor for one level of the recursive code

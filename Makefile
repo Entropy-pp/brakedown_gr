@@ -15,16 +15,16 @@ runint: interpolate
 	./$(OUTDIR)/interpolate
 
 joye_libert: | out
-	g++ -O2 -std=c++11 -I./include test/joye_libert_test.cpp src/*.cpp -o $(OUTDIR)/jltest -pthread -lntl -lgmp -lm
+	g++ -O2 -std=c++11 -I./include test/joye_libert_test.cpp src/*.cpp -o $(OUTDIR)/jltest -pthread -lntl -lgmp -lm -lssl -lcrypto
 
 rinocchio: | out
-	g++ -O2 -std=c++11 -I./include test/rinocchio_test.cpp src/*.cpp -o $(OUTDIR)/rinocchio -pthread -lntl -lgmp -lm
+	g++ -O2 -std=c++11 -I./include test/rinocchio_test.cpp src/*.cpp -o $(OUTDIR)/rinocchio -pthread -lntl -lgmp -lm -lssl -lcrypto
 
 invertible: | out
-	g++ -O2 -std=c++11 -I./include test/invertible_test.cpp src/*.cpp -o $(OUTDIR)/invertible -pthread -lntl -lgmp -lm
+	g++ -O2 -std=c++11 -I./include test/invertible_test.cpp src/*.cpp -o $(OUTDIR)/invertible -pthread -lntl -lgmp -lm -lssl -lcrypto
 
 interpolate: | out
-	g++ -O2 -std=c++11 -I./include test/interpolate_test.cpp src/*.cpp -o $(OUTDIR)/interpolate -pthread -lntl -lgmp -lm
+	g++ -O2 -std=c++11 -I./include test/interpolate_test.cpp src/*.cpp -o $(OUTDIR)/interpolate -pthread -lntl -lgmp -lm -lssl -lcrypto
 
 out:
 	mkdir -p $(OUTDIR)
@@ -37,38 +37,37 @@ BRAKEDOWN_SRCS = src/gr.cpp src/sparse_matrix_gr.cpp src/brakedown_code_gr.cpp \
 
 brakedown_test: | out
 	g++ -O2 -std=c++11 -I./include test/brakedown_gr_test.cpp $(BRAKEDOWN_SRCS) \
-		-o $(OUTDIR)/brakedown_gr_test -pthread -lntl -lgmp -lm
+		-o $(OUTDIR)/brakedown_gr_test -pthread -lntl -lgmp -lm -lssl -lcrypto
 
 runbrakedown: brakedown_test
 	./$(OUTDIR)/brakedown_gr_test
 
 # ============================================================
-# Fair Benchmark: 在同一进程中运行 Rinocchio + Brakedown
-# 使用矩阵乘法电路 (与原始 Rinocchio 一致)
+# Fair Benchmark
 # ============================================================
 fair_benchmark: | out
 	g++ -O2 -std=c++11 -I./include test/fair_benchmark.cpp src/*.cpp \
-		-o $(OUTDIR)/fair_benchmark -pthread -lntl -lgmp -lm
+		-o $(OUTDIR)/fair_benchmark -pthread -lntl -lgmp -lm -lssl -lcrypto
 
 runfair: fair_benchmark
 	./$(OUTDIR)/fair_benchmark
 
 # ============================================================
-# Rinocchio-only benchmark (独立运行)
+# Rinocchio-only benchmark
 # ============================================================
 bench_commitment: | out
 	g++ -O2 -std=c++11 -I./include test/bench_commitment.cpp src/*.cpp \
-		-o $(OUTDIR)/bench_commitment -pthread -lntl -lgmp -lm
+		-o $(OUTDIR)/bench_commitment -pthread -lntl -lgmp -lm -lssl -lcrypto
 
 runbench: bench_commitment
 	./$(OUTDIR)/bench_commitment
 
 # ============================================================
-# Brakedown PCS Benchmark (独立性能测试)
+# Brakedown PCS Benchmark
 # ============================================================
 bench_pcs: | out
 	g++ -O2 -std=c++11 -I./include test/bench_pcs.cpp $(BRAKEDOWN_SRCS) \
-		-o $(OUTDIR)/bench_pcs -pthread -lntl -lgmp -lm
+		-o $(OUTDIR)/bench_pcs -pthread -lntl -lgmp -lm -lssl -lcrypto
 
 runbenchpcs: bench_pcs
 	./$(OUTDIR)/bench_pcs
@@ -78,7 +77,17 @@ runbenchpcs: bench_pcs
 # ============================================================
 small_ring_test: | out
 	g++ -O2 -std=c++11 -I./include test/small_ring_test.cpp $(BRAKEDOWN_SRCS) \
-		-o $(OUTDIR)/small_ring_test -pthread -lntl -lgmp -lm
+		-o $(OUTDIR)/small_ring_test -pthread -lntl -lgmp -lm -lssl -lcrypto
 
 runsmallring: small_ring_test
 	./$(OUTDIR)/small_ring_test
+
+# ============================================================
+# Full Benchmark: Large Ring + Small Ring
+# ============================================================
+bench_brakedown: | out
+	g++ -O2 -std=c++11 -I./include test/bench_brakedown.cpp $(BRAKEDOWN_SRCS) \
+		-o $(OUTDIR)/bench_brakedown -pthread -lntl -lgmp -lm -lssl -lcrypto
+
+runbenchbrakedown: bench_brakedown
+	./$(OUTDIR)/bench_brakedown

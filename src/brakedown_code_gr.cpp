@@ -11,7 +11,11 @@ using namespace NTL;
 static void reed_solomon_gr(const ZZ_pE* input, long input_len,
                             ZZ_pE* output, long output_len)
 {
-    assert(output_len < (1L << ZZ_pE::degree()));
+    // degree >= 64 时 1L << degree 溢出, 但求值点数量必然足够, 跳过检查
+    long deg = ZZ_pE::degree();
+    if (deg < 63) {
+        assert(output_len < (1L << deg));
+    }
     ZZ_pEX poly;
     for (long i = 0; i < input_len; i++) {
         SetCoeff(poly, i, input[i]);
@@ -21,7 +25,6 @@ static void reed_solomon_gr(const ZZ_pE* input, long input_len,
         output[i] = eval(poly, pt);
     }
 }
-
 // ============================================================
 // brakedown_code_setup (Large Ring)
 // ============================================================

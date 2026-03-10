@@ -2,35 +2,16 @@
 #include <NTL/ZZ.h>
 #include <cstring>
 #include <cassert>
+#include <openssl/sha.h>
 
 using namespace NTL;
 
 // ============================================================
-// FNV-1a hash stretched to 32 bytes (prototype only).
-// For production: replace with OpenSSL SHA-256.
-//   #include <openssl/sha.h>
-//   SHA256(data, len, out);
+// SHA-256 using OpenSSL (collision-resistant)
 // ============================================================
-static void simple_hash_256(const unsigned char* data, size_t len, unsigned char out[32]) {
-    uint64_t h1 = 14695981039346656037ULL;
-    uint64_t h2 = 14695981039346656037ULL ^ 0xDEADBEEF;
-    uint64_t h3 = 14695981039346656037ULL ^ 0xCAFEBABE;
-    uint64_t h4 = 14695981039346656037ULL ^ 0x12345678;
-    for (size_t i = 0; i < len; i++) {
-        h1 ^= data[i]; h1 *= 1099511628211ULL;
-        h2 ^= data[i]; h2 *= 1099511628213ULL;
-        h3 ^= data[i]; h3 *= 1099511628249ULL;
-        h4 ^= data[i]; h4 *= 1099511628307ULL;
-    }
-    memcpy(out,      &h1, 8);
-    memcpy(out + 8,  &h2, 8);
-    memcpy(out + 16, &h3, 8);
-    memcpy(out + 24, &h4, 8);
-}
-
 std::vector<unsigned char> sha256(const unsigned char* data, size_t len) {
-    std::vector<unsigned char> out(32);
-    simple_hash_256(data, len, out.data());
+    std::vector<unsigned char> out(SHA256_DIGEST_LENGTH);  // 32 bytes
+    SHA256(data, len, out.data());
     return out;
 }
 
