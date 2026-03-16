@@ -2,8 +2,18 @@
 #include <gr.h>
 #include <cassert>
 #include <algorithm>
+#include <chrono>
 
 using namespace NTL;
+
+// ============================================================
+// 计时辅助
+// ============================================================
+using hrc = std::chrono::high_resolution_clock;
+
+static double ms_between(hrc::time_point start, hrc::time_point end) {
+    return std::chrono::duration<double, std::milli>(end - start).count();
+}
 
 // ============================================================
 // Reed-Solomon over GR
@@ -11,7 +21,6 @@ using namespace NTL;
 static void reed_solomon_gr(const ZZ_pE* input, long input_len,
                             ZZ_pE* output, long output_len)
 {
-    // degree >= 64 时 1L << degree 溢出, 但求值点数量必然足够, 跳过检查
     long deg = ZZ_pE::degree();
     if (deg < 63) {
         assert(output_len < (1L << deg));
@@ -25,6 +34,7 @@ static void reed_solomon_gr(const ZZ_pE* input, long input_len,
         output[i] = eval(poly, pt);
     }
 }
+
 // ============================================================
 // brakedown_code_setup (Large Ring)
 // ============================================================
@@ -71,7 +81,7 @@ BrakedownCodeGR brakedown_code_setup(long row_len, long k, long degree) {
 }
 
 // ============================================================
-// brakedown_code_setup_auto — 自动选择 Large/Small Ring
+// brakedown_code_setup_auto
 // ============================================================
 BrakedownCodeGR brakedown_code_setup_auto(long row_len, long k, long degree, long lambda) {
     bool is_small = !isLargeRing(degree, lambda);
@@ -82,7 +92,6 @@ BrakedownCodeGR brakedown_code_setup_auto(long row_len, long k, long degree, lon
         return code;
     }
 
-    // ============ Small Ring 路径 ============
     long pf = smallRingPackingFactor(degree, lambda);
     long ext_deg = pf * degree;
     long packed_row = (row_len + pf - 1) / pf;
@@ -125,8 +134,6 @@ BrakedownCodeGR brakedown_code_setup_auto(long row_len, long k, long degree, lon
     code.num_col_open = brakedown_num_column_opening(code.spec);
     code.num_prox_test = brakedown_num_proximity_testing(code.spec, log2_q_ext, packed_row, n_0);
 
-    // 注意: 稀疏矩阵的维度基于 packed_row_len，
-    // 系数在 GR(p^s,kr) 上，需在扩展环 context 下生成
     code.a_mats.resize(a_dims.size());
     code.b_mats.resize(b_dims.size());
     for (size_t i = 0; i < a_dims.size(); i++) {
@@ -140,26 +147,37 @@ BrakedownCodeGR brakedown_code_setup_auto(long row_len, long k, long degree, lon
 }
 
 // ============================================================
-// brakedown_encode (Large Ring in-place)
+// brakedown_encode — 带细分计时版本
 // ============================================================
-void brakedown_encode(const BrakedownCodeGR& code, ZZ_pE* codeword) {
-    // 对 small ring: 此函数也被 brakedown_encode_small_ring 内部调用,
-    // 此时 NTL context 已切换到 ext ring, codeword 是 packed 后的。
-    // 统一使用 packed_row_len 作为消息长度。
+void brakedown_encode(const BrakedownCodeGR& code, ZZ_pE* codeword, EncodeTiming& timing) {
+    auto t_total_start = hrc::now();
+
     long row_len = code.is_small_ring ? code.packed_row_len : code.row_len;
     long cw_len  = code.codeword_len;
 
+    // 初始化
+    timing.forward_pass_ms  = 0;
+    timing.bottom_rs_ms     = 0;
+    timing.backward_pass_ms = 0;
+    timing.assemble_ms      = 0;
+    timing.total_ms         = 0;
+
     if (code.a_mats.empty()) {
+        auto t1 = hrc::now();
         long rs_len = cw_len - row_len;
         if (rs_len > 0) {
             reed_solomon_gr(codeword, row_len, codeword + row_len, rs_len);
         }
+        auto t2 = hrc::now();
+        timing.bottom_rs_ms = ms_between(t1, t2);
+        timing.total_ms = ms_between(t_total_start, t2);
         return;
     }
 
     long L = (long)code.a_mats.size();
 
-    // Forward pass
+    // ---- Forward pass ----
+    auto t_fwd_start = hrc::now();
     std::vector<std::vector<ZZ_pE>> intermediates(L);
     {
         const ZZ_pE* src = codeword;
@@ -171,8 +189,11 @@ void brakedown_encode(const BrakedownCodeGR& code, ZZ_pE* codeword) {
             src = intermediates[i].data();
         }
     }
+    auto t_fwd_end = hrc::now();
+    timing.forward_pass_ms = ms_between(t_fwd_start, t_fwd_end);
 
-    // Bottom RS
+    // ---- Bottom RS ----
+    auto t_rs_start = hrc::now();
     const auto& last_inter = intermediates[L - 1];
     long rs_input_len  = (long)last_inter.size();
     long rs_output_len = iceil(rs_input_len * code.spec.R) - rs_input_len;
@@ -180,8 +201,11 @@ void brakedown_encode(const BrakedownCodeGR& code, ZZ_pE* codeword) {
     std::vector<ZZ_pE> rs_output(rs_output_len);
     reed_solomon_gr(last_inter.data(), rs_input_len,
                     rs_output.data(), rs_output_len);
+    auto t_rs_end = hrc::now();
+    timing.bottom_rs_ms = ms_between(t_rs_start, t_rs_end);
 
-    // Backward pass
+    // ---- Backward pass ----
+    auto t_bwd_start = hrc::now();
     std::vector<std::vector<ZZ_pE>> b_outputs(L);
     {
         const auto& B = code.b_mats[L - 1];
@@ -212,8 +236,11 @@ void brakedown_encode(const BrakedownCodeGR& code, ZZ_pE* codeword) {
             sparseMatVecMul(Bi, bi_input.data(), b_outputs[i].data());
         }
     }
+    auto t_bwd_end = hrc::now();
+    timing.backward_pass_ms = ms_between(t_bwd_start, t_bwd_end);
 
-    // Assemble
+    // ---- Assemble ----
+    auto t_asm_start = hrc::now();
     long offset = row_len;
     for (long i = 0; i < L - 1; i++) {
         long sz = (long)intermediates[i].size();
@@ -239,6 +266,18 @@ void brakedown_encode(const BrakedownCodeGR& code, ZZ_pE* codeword) {
         offset += copy_len;
     }
     for (long j = offset; j < cw_len; j++) clear(codeword[j]);
+    auto t_asm_end = hrc::now();
+    timing.assemble_ms = ms_between(t_asm_start, t_asm_end);
+
+    timing.total_ms = ms_between(t_total_start, t_asm_end);
+}
+
+// ============================================================
+// brakedown_encode — 原有接口 (不带计时), 委托给带计时版本
+// ============================================================
+void brakedown_encode(const BrakedownCodeGR& code, ZZ_pE* codeword) {
+    EncodeTiming timing;
+    brakedown_encode(code, codeword, timing);
 }
 
 // ============================================================
@@ -284,7 +323,6 @@ static std::vector<ZZ_pX> unpack_element(const ZZ_pE& ext_elem,
     return result;
 }
 
-// 公开版本供 PCS 使用
 ZZ_pE pack_elements_pub(const std::vector<ZZ_pX>& base_coeffs,
                          long pf, long base_r) {
     return pack_elements(base_coeffs, pf, base_r);
@@ -297,19 +335,6 @@ std::vector<ZZ_pX> unpack_element_pub(const ZZ_pE& ext_elem,
 
 // ============================================================
 // Small Ring 编码: Algorithm 2 (Enc')
-//
-// 论文 §3.2:
-//   1. 将 kn 个 GR(p^s,r) 元素每 k 个打包为 GR(p^s,kr) 的 1 个元素
-//   2. 在 GR(p^s,kr) 上调用标准 Enc
-//
-// 实现策略:
-//   - 在调用前，调用者位于 base ring GR(p^s,r) 的 NTL context
-//   - 此函数会:
-//     a) 先在 base ring context 中提取所有输入元素的 ZZ_pX 系数
-//     b) 切换 NTL context 到 ext ring GR(p^s,kr)
-//     c) 执行 pack → encode
-//     d) 结果写入 output_ext (在 ext ring context 下)
-//   - 调用后 NTL context 停留在 ext ring
 // ============================================================
 void brakedown_encode_small_ring(const BrakedownCodeGR& code,
                                   const ZZ_pE* input_small,
@@ -324,20 +349,15 @@ void brakedown_encode_small_ring(const BrakedownCodeGR& code,
     long packed_len = code.packed_row_len;
     long cw_len = code.codeword_len;
 
-    // Step a) 在当前 base ring context 下提取所有输入的 ZZ_pX 系数
     std::vector<ZZ_pX> input_polys(input_len);
     for (long i = 0; i < input_len; i++) {
         input_polys[i] = rep(input_small[i]);
     }
 
-    // Step b) 切换到扩展环 GR(p^s, kr)
-    // 获取当前 p^s (从 ZZ_p::modulus())
     ZZ ps = ZZ_p::modulus();
     ZZ_pX ext_mod = primitiveIrredPoly(ext_r);
     ZZ_pE::init(ext_mod);
 
-    // Step c) Pack: 每 pf 个 base ring 元素 → 1 个 ext ring 元素
-    // 然后放入 codeword 的消息区域
     for (long j = 0; j < packed_len; j++) {
         std::vector<ZZ_pX> group(pf);
         for (long t = 0; t < pf; t++) {
@@ -345,16 +365,13 @@ void brakedown_encode_small_ring(const BrakedownCodeGR& code,
             if (src_idx < input_len) {
                 group[t] = input_polys[src_idx];
             }
-            // else: 默认零多项式 (padding)
         }
         output_ext[j] = pack_elements(group, pf, base_r);
     }
 
-    // 清零冗余区域
     for (long j = packed_len; j < cw_len; j++) {
         clear(output_ext[j]);
     }
 
-    // Step d) 在 ext ring 上调用标准 Enc
     brakedown_encode(code, output_ext);
 }

@@ -337,9 +337,9 @@ ZZ_pX primitiveIrredPoly(long degree) {
         // x^128 + x^7 + x^2 + x^1 + 1
         SetCoeff(P, 1); SetCoeff(P, 2); SetCoeff(P, 7);
         break;
-    case 160:
-        // x^160 + x^5 + x^3 + x^2 + 1
-        SetCoeff(P, 2); SetCoeff(P, 3); SetCoeff(P, 5);
+    case 162:
+        // x^162 + x^9 + x^5 + x^3 + 1
+        SetCoeff(P, 3); SetCoeff(P, 5); SetCoeff(P, 9);
         break;
     case 192:
         // x^192 + x^7 + x^2 + x^1 + 1

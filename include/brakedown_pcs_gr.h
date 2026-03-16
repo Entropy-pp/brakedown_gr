@@ -14,6 +14,16 @@ using namespace NTL;
 // Protocol: [GLSTW21] adapted to GR(2^k, d)
 // ============================================================
 
+// Commit 阶段细分计时结果 (单位: 毫秒)
+struct CommitTiming {
+    double fill_rows_ms;     // 行填充 (将多项式系数排入矩阵行)
+    double pack_rows_ms;     // [Small Ring only] pack base→ext ring
+    double encode_rows_ms;   // 编码所有行 (brakedown_encode)
+    double column_hash_ms;   // 列哈希 (SHA-256)
+    double merkle_build_ms;  // 建 Merkle tree
+    double total_ms;         // 总计
+};
+
 struct BrakedownCommitment {
     std::vector<unsigned char> root;
     std::vector<ZZ_pE> encoded_rows; // num_rows * codeword_len flat
@@ -41,11 +51,20 @@ struct BrakedownEvalProof {
     ZZ_pE eval_value;
 };
 
+// 原有接口 (不带计时)
 BrakedownCommitment brakedown_commit(
     const BrakedownCodeGR& code,
     const ZZ_pE* poly_coeffs,
     long n,
     long num_rows);
+
+// 带细分计时的接口
+BrakedownCommitment brakedown_commit(
+    const BrakedownCodeGR& code,
+    const ZZ_pE* poly_coeffs,
+    long n,
+    long num_rows,
+    CommitTiming& timing);
 
 BrakedownEvalProof brakedown_prove(
     const BrakedownCodeGR& code,

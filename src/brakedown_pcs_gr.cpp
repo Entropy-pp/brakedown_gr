@@ -2,6 +2,8 @@
 #include <gr.h>
 #include <cassert>
 #include <cstdlib>
+#include <chrono>
+#include <iostream>
 
 using namespace NTL;
 
@@ -24,7 +26,7 @@ static ZZ_pE inner_product_gr(const std::vector<ZZ_pE>& a,
 }
 
 // ============================================================
-// 辅助: 计算 Small Ring 下实际的 proximity test 次数
+// 辅助: 计算 Small Ring 下��际的 proximity test 次数
 // ============================================================
 static long effective_num_prox(const BrakedownCodeGR& code, long num_rows) {
     if (num_rows <= 1) return 0;
@@ -51,7 +53,7 @@ static void switch_to_ext_ring(long ext_degree) {
 }
 
 // ============================================================
-// 辅助: 将一行 base ring 元素 pack 为 ext ring 向量
+// 辅助: 将一��� base ring 元素 pack 为 ext ring 向量
 // 调用前必须在 ext ring context
 // ============================================================
 static std::vector<ZZ_pE> pack_row(
@@ -71,14 +73,26 @@ static std::vector<ZZ_pE> pack_row(
 }
 
 // ============================================================
-// COMMIT — 与之前相同，无变化
+// 计时辅助宏
+// ============================================================
+using hrc = std::chrono::high_resolution_clock;
+
+static double ms_between(hrc::time_point start, hrc::time_point end) {
+    return std::chrono::duration<double, std::milli>(end - start).count();
+}
+
+// ============================================================
+// COMMIT — 带细分计时版本
 // ============================================================
 BrakedownCommitment brakedown_commit(
     const BrakedownCodeGR& code,
     const ZZ_pE* poly_coeffs,
     long n,
-    long num_rows)
+    long num_rows,
+    CommitTiming& timing)
 {
+    auto t_total_start = hrc::now();
+
     BrakedownCommitment comm;
     comm.num_rows = num_rows;
     comm.codeword_len = code.codeword_len;
@@ -86,9 +100,20 @@ BrakedownCommitment brakedown_commit(
 
     assert(n <= num_rows * row_len);
 
+    // 初始化 timing
+    timing.fill_rows_ms   = 0;
+    timing.pack_rows_ms   = 0;
+    timing.encode_rows_ms = 0;
+    timing.column_hash_ms = 0;
+    timing.merkle_build_ms = 0;
+    timing.total_ms       = 0;
+
     if (!code.is_small_ring) {
         // ====== Large Ring ======
         comm.encoded_rows.resize((long)num_rows * code.codeword_len);
+
+        // --- Step 1: Fill rows ---
+        auto t1 = hrc::now();
         for (long i = 0; i < num_rows; i++) {
             for (long j = 0; j < row_len; j++) {
                 long idx = i * row_len + j;
@@ -100,22 +125,60 @@ BrakedownCommitment brakedown_commit(
             for (long j = row_len; j < code.codeword_len; j++) {
                 clear(comm.encoded_rows[i * code.codeword_len + j]);
             }
-            brakedown_encode(code, &comm.encoded_rows[i * code.codeword_len]);
         }
+        auto t2 = hrc::now();
+        timing.fill_rows_ms = ms_between(t1, t2);
+
+        // --- Step 2: Encode rows ---
+        auto t3 = hrc::now();
+        // for (long i = 0; i < num_rows; i++) {
+        //     brakedown_encode(code, &comm.encoded_rows[i * code.codeword_len]);
+        // }
+
+        // 在 commit 中累加每行的 encode 细分计时
+    EncodeTiming enc_timing_total = {0, 0, 0, 0, 0};
+
+    for (long i = 0; i < num_rows; i++) {
+        EncodeTiming enc_t;
+        brakedown_encode(code, &comm.encoded_rows[i * code.codeword_len], enc_t);
+        enc_timing_total.forward_pass_ms  += enc_t.forward_pass_ms;
+        enc_timing_total.bottom_rs_ms     += enc_t.bottom_rs_ms;
+        enc_timing_total.backward_pass_ms += enc_t.backward_pass_ms;
+        enc_timing_total.assemble_ms      += enc_t.assemble_ms;
+        enc_timing_total.total_ms         += enc_t.total_ms;
+    }
+
+    std::cout << "  Encode breakdown (all rows summed):" << std::endl;
+    std::cout << "    Forward pass:  " << enc_timing_total.forward_pass_ms  << " ms" << std::endl;
+    std::cout << "    Bottom RS:     " << enc_timing_total.bottom_rs_ms     << " ms" << std::endl;
+    std::cout << "    Backward pass: " << enc_timing_total.backward_pass_ms << " ms" << std::endl;
+    std::cout << "    Assemble:      " << enc_timing_total.assemble_ms      << " ms" << std::endl;
+    std::cout << "    Total:         " << enc_timing_total.total_ms         << " ms" << std::endl;
+
+        auto t4 = hrc::now();
+        timing.encode_rows_ms = ms_between(t3, t4);
+
     } else {
         // ====== Small Ring: pack → encode in ext ring ======
         comm.encoded_rows.resize((long)num_rows * code.codeword_len);
 
+        double fill_acc = 0, pack_acc = 0, encode_acc = 0;
+
         for (long i = 0; i < num_rows; i++) {
+            // --- Fill: 提取 base ring 系数 ---
+            auto tf1 = hrc::now();
             switch_to_base_ring(code.base_degree);
             std::vector<ZZ_pX> row_polys(row_len);
             for (long j = 0; j < row_len; j++) {
                 long idx = i * row_len + j;
                 if (idx < n)
                     row_polys[j] = rep(poly_coeffs[idx]);
-                // else: 默认零多项式
             }
+            auto tf2 = hrc::now();
+            fill_acc += ms_between(tf1, tf2);
 
+            // --- Pack: base ring → ext ring ---
+            auto tp1 = hrc::now();
             switch_to_ext_ring(code.ext_degree);
             long pf = code.packing_factor;
             long base_r = code.base_degree;
@@ -126,13 +189,24 @@ BrakedownCommitment brakedown_commit(
             auto packed = pack_row(row_polys, row_len, packed_len, pf, base_r);
             for (long j = 0; j < packed_len; j++) cw_ptr[j] = packed[j];
             for (long j = packed_len; j < cw_len; j++) clear(cw_ptr[j]);
+            auto tp2 = hrc::now();
+            pack_acc += ms_between(tp1, tp2);
 
+            // --- Encode ---
+            auto te1 = hrc::now();
             brakedown_encode(code, cw_ptr);
+            auto te2 = hrc::now();
+            encode_acc += ms_between(te1, te2);
         }
         switch_to_ext_ring(code.ext_degree);
+
+        timing.fill_rows_ms   = fill_acc;
+        timing.pack_rows_ms   = pack_acc;
+        timing.encode_rows_ms = encode_acc;
     }
 
-    // Build Merkle tree
+    // --- Step 3: Column hashing ---
+    auto t5 = hrc::now();
     std::vector<std::vector<unsigned char>> leaf_hashes(code.codeword_len);
     for (long col = 0; col < code.codeword_len; col++) {
         std::vector<ZZ_pE> column(num_rows);
@@ -141,9 +215,33 @@ BrakedownCommitment brakedown_commit(
         }
         leaf_hashes[col] = hash_column(column.data(), num_rows);
     }
+    auto t6 = hrc::now();
+    timing.column_hash_ms = ms_between(t5, t6);
+
+    // --- Step 4: Build Merkle tree ---
+    auto t7 = hrc::now();
     comm.tree = build_merkle_tree(leaf_hashes);
     comm.root = comm.tree.root;
+    auto t8 = hrc::now();
+    timing.merkle_build_ms = ms_between(t7, t8);
+
+    auto t_total_end = hrc::now();
+    timing.total_ms = ms_between(t_total_start, t_total_end);
+
     return comm;
+}
+
+// ============================================================
+// COMMIT — 原有接口 (不带计时), 委托给带计时版本
+// ============================================================
+BrakedownCommitment brakedown_commit(
+    const BrakedownCodeGR& code,
+    const ZZ_pE* poly_coeffs,
+    long n,
+    long num_rows)
+{
+    CommitTiming timing;
+    return brakedown_commit(code, poly_coeffs, n, num_rows, timing);
 }
 
 // ============================================================
@@ -191,7 +289,7 @@ BrakedownEvalProof brakedown_prove(
         for (long t = 0; t < num_prox; t++) {
             proof.prox_coeffs[t].resize(num_rows);
             for (long i = 0; i < num_rows; i++)
-                proof.prox_coeffs[t][i] = randomInvertible();
+                proof.prox_coeffs[t][i] = random_ZZ_pE();
             proof.combined_rows.push_back(combine_rows_large(proof.prox_coeffs[t]));
         }
         auto q1_combined = combine_rows_large(q1);
@@ -223,9 +321,6 @@ BrakedownEvalProof brakedown_prove(
         }
 
         // Step 3: 在 ext ring 中做 combine (c_i 嵌入到 ext ring)
-        // 同时需要生成 prox_coeffs (base ring 元素, 但存储为 ZZ_pX)
-        // 以及计算 eval_value (需要在 base ring 做 inner product)
-
         // 先生成 prox coeffs (在 base ring context 下)
         switch_to_base_ring(code.base_degree);
         proof.prox_coeffs.resize(num_prox);
@@ -404,12 +499,9 @@ bool brakedown_verify(
         long packed_len = code.packed_row_len;
 
         // 1. Eval consistency
-        //    combined_rows.back() 是 packed_len 个 ext ring 元素
-        //    需要 unpack 回 row_len 个 base ring 元素, 然后和 q2 做内积
         switch_to_ext_ring(code.ext_degree);
         const auto& q1_packed = proof.combined_rows.back();
 
-        // unpack 每个 ext ring 元素为 pf 个 base ring ZZ_pX
         std::vector<ZZ_pX> unpacked_polys;
         for (long j = 0; j < packed_len; j++) {
             auto parts = unpack_element_pub(q1_packed[j], pf, base_r);
@@ -418,7 +510,6 @@ bool brakedown_verify(
             }
         }
 
-        // 切到 base ring, 从 ZZ_pX 恢复 ZZ_pE, 和 q2 做内积
         switch_to_base_ring(code.base_degree);
         ZZ_pE computed_eval;
         clear(computed_eval);
@@ -448,8 +539,7 @@ bool brakedown_verify(
             all_coeff_polys.push_back(qp);
         }
 
-        // 3. Re-encode: combined_rows 已经是 packed ext ring 元素
-        //    直接放入 codeword 的消息区域然后 encode
+        // 3. Re-encode
         switch_to_ext_ring(code.ext_degree);
         std::vector<std::vector<ZZ_pE>> encoded_combined(proof.combined_rows.size());
         for (size_t t = 0; t < proof.combined_rows.size(); t++) {

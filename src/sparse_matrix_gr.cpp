@@ -22,7 +22,7 @@ SparseMatrixGR createRandomSparseMatrix(const LevelDim& dim) {
         M.rows[i].entries.reserve(dim.d);
         for (long col : chosen) {
             // Random invertible coefficient in GR*
-            ZZ_pE val = randomInvertible();
+            ZZ_pE val = random_ZZ_pE();
             M.rows[i].entries.push_back({col, val});
         }
     }

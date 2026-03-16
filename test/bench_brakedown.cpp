@@ -203,8 +203,19 @@ static BenchResult run_benchmark(
     // === Commit ===
     switch_ring(base_r);
     timer.start();
-    auto comm = brakedown_commit(code, poly.data(), n, num_rows);
+    CommitTiming timing;
+    auto comm = brakedown_commit(code, poly.data(), n, num_rows, timing);
     res.commit_ms = timer.elapsed_ms();
+
+    std::cout << "  Commit breakdown:" << std::endl;
+    std::cout << "    Fill rows:     " << timing.fill_rows_ms    << " ms" << std::endl;
+    if (code.is_small_ring) {
+        std::cout << "    Pack rows:     " << timing.pack_rows_ms << " ms" << std::endl;
+    }
+    std::cout << "    Encode rows:   " << timing.encode_rows_ms  << " ms" << std::endl;
+    std::cout << "    Column hash:   " << timing.column_hash_ms  << " ms" << std::endl;
+    std::cout << "    Merkle build:  " << timing.merkle_build_ms << " ms" << std::endl;
+    std::cout << "    Total:         " << timing.total_ms        << " ms" << std::endl;
 
     // === Prove ===
     switch_ring(base_r);
@@ -278,15 +289,15 @@ static void print_detail(const BenchResult& r) {
 // Main
 // ============================================================
 int main() {
-    long s = 2; // p^s = 4, 即 GR(2^2, d)
+    long s = 1; // p^s = 4, 即 GR(2^2, d)
 
     // ★ ZZ_p::init 全程只调一次
     ZZ_p::init(ZZ(1) << s);
 
     cout << endl;
     cout << "╔══════════════════════════════════════════════════════════════╗" << endl;
-    cout << "║    Brakedown PCS over Galois Ring — Full Benchmark          ║" << endl;
-    cout << "║    Base modulus: p^s = 2^" << s << " = " << (1L << s) << setw(36) << "║" << endl;
+    cout << "║    Brakedown PCS over Galois Ring — Full Benchmark           ║" << endl;
+    cout << "║    Base modulus: p^s = 2^" << s << " = " << (1L << s) << setw(34) << "║" << endl;
     cout << "╚══════════════════════════════════════════════════════════════╝" << endl;
     cout << endl;
 
@@ -300,9 +311,9 @@ int main() {
     cout << ">>> Part 1: Large Ring  GR(2^2, 128), lambda=128" << endl;
     print_header();
     {
-        long base_r = 128;
+        long base_r = 162;
         long lambda = 128;
-        for (long nv : {14, 16, 18}) {
+        for (long nv : {13, 14, 15, 16}) {
             string label = "Large d=128 nv=" + to_string(nv);
             auto r = run_benchmark(label, s, base_r, lambda, nv);
             print_result(r);
@@ -312,34 +323,34 @@ int main() {
     }
     cout << endl;
 
-    // ============================================================
-    // Part 2: Small Ring 测试 (不同 base degree)
-    //   degree < lambda → isLargeRing = false
-    //   lambda = 32 (测试用低安全参数, 加速)
-    // ============================================================
-    cout << ">>> Part 2: Small Ring  lambda=32, 不同 base degree" << endl;
-    print_header();
-    {
-        long lambda = 32;
-        for (long base_r : {8, 16}) {
-            for (long nv : {10, 12, 14}) {
-                long pf = smallRingPackingFactor(base_r, lambda);
-                string label = "Small d=" + to_string(base_r)
-                    + " k=" + to_string(pf) + " nv=" + to_string(nv);
-                auto r = run_benchmark(label, s, base_r, lambda, nv);
-                print_result(r);
-                print_detail(r);
-                results.push_back(r);
-            }
-        }
-    }
-    cout << endl;
+    // // ============================================================
+    // // Part 2: Small Ring 测试 (不同 base degree)
+    // //   degree < lambda → isLargeRing = false
+    // //   lambda = 32 (测试用低安全参数, 加速)
+    // // ============================================================
+    // cout << ">>> Part 2: Small Ring  lambda=32, 不同 base degree" << endl;
+    // print_header();
+    // {
+    //     long lambda = 32;
+    //     for (long base_r : {8, 16}) {
+    //         for (long nv : {10, 12, 14}) {
+    //             long pf = smallRingPackingFactor(base_r, lambda);
+    //             string label = "Small d=" + to_string(base_r)
+    //                 + " k=" + to_string(pf) + " nv=" + to_string(nv);
+    //             auto r = run_benchmark(label, s, base_r, lambda, nv);
+    //             print_result(r);
+    //             print_detail(r);
+    //             results.push_back(r);
+    //         }
+    //     }
+    // }
+    // cout << endl;
 
     // ============================================================
     // Part 3: Small Ring 高安全参数
     //   lambda = 128, base_r = 8 → pf = 16, ext = 128
     // ============================================================
-    cout << ">>> Part 3: Small Ring  GR(2^2, 8), lambda=128 (高安全参数)" << endl;
+    cout << ">>> Part 2: Small Ring  GR(2^2, 8), lambda=128 (高安全参数)" << endl;
     print_header();
     {
         long base_r = 8;
@@ -355,49 +366,49 @@ int main() {
     }
     cout << endl;
 
-    // ============================================================
-    // Part 4: 固定 num_vars, 对比 Large vs Small
-    // ============================================================
-    cout << ">>> Part 4: Large vs Small 对比 (num_vars=14)" << endl;
-    print_header();
-    {
-        long nv = 14;
-        // Large: d=128, lambda=128
-        {
-            auto r = run_benchmark("Large d=128 L=128", s, 128, 128, nv);
-            print_result(r);
-            print_detail(r);
-            results.push_back(r);
-        }
-        // Small: d=8, lambda=32
-        {
-            auto r = run_benchmark("Small d=8 k=4 L=32", s, 8, 32, nv);
-            print_result(r);
-            print_detail(r);
-            results.push_back(r);
-        }
-        // Small: d=16, lambda=32
-        {
-            auto r = run_benchmark("Small d=16 k=2 L=32", s, 16, 32, nv);
-            print_result(r);
-            print_detail(r);
-            results.push_back(r);
-        }
-        // Small: d=8, lambda=128
-        {
-            auto r = run_benchmark("Small d=8 k=16 L=128", s, 8, 128, nv);
-            print_result(r);
-            print_detail(r);
-            results.push_back(r);
-        }
-    }
-    cout << endl;
+    // // ============================================================
+    // // Part 4: 固定 num_vars, 对比 Large vs Small
+    // // ============================================================
+    // cout << ">>> Part 4: Large vs Small 对比 (num_vars=14)" << endl;
+    // print_header();
+    // {
+    //     long nv = 14;
+    //     // Large: d=128, lambda=128
+    //     {
+    //         auto r = run_benchmark("Large d=128 L=128", s, 128, 128, nv);
+    //         print_result(r);
+    //         print_detail(r);
+    //         results.push_back(r);
+    //     }
+    //     // Small: d=8, lambda=32
+    //     {
+    //         auto r = run_benchmark("Small d=8 k=4 L=32", s, 8, 32, nv);
+    //         print_result(r);
+    //         print_detail(r);
+    //         results.push_back(r);
+    //     }
+    //     // Small: d=16, lambda=32
+    //     {
+    //         auto r = run_benchmark("Small d=16 k=2 L=32", s, 16, 32, nv);
+    //         print_result(r);
+    //         print_detail(r);
+    //         results.push_back(r);
+    //     }
+    //     // Small: d=8, lambda=128
+    //     {
+    //         auto r = run_benchmark("Small d=8 k=16 L=128", s, 8, 128, nv);
+    //         print_result(r);
+    //         print_detail(r);
+    //         results.push_back(r);
+    //     }
+    // }
+    // cout << endl;
 
     // ============================================================
     // 汇总
     // ============================================================
     cout << "╔══════════════════════════════════════════════════════════════╗" << endl;
-    cout << "║                         Summary                            ║" << endl;
+    cout << "║                         Summary                              ║" << endl;
     cout << "╚══════════════════════════════════════════════════════════════╝" << endl;
     int pass = 0, fail = 0;
     for (auto& r : results) {
