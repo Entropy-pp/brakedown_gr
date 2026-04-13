@@ -10,13 +10,30 @@ using namespace NTL;
 // ============================================================
 // Inner product over GR
 // ============================================================
+// static ZZ_pE inner_product_gr(const ZZ_pE* a, const ZZ_pE* b, long len) {
+//     ZZ_pE result;
+//     clear(result);
+//     for (long i = 0; i < len; i++) {
+//         result += a[i] * b[i];
+//     }
+//     return result;
+// }
+
 static ZZ_pE inner_product_gr(const ZZ_pE* a, const ZZ_pE* b, long len) {
-    ZZ_pE result;
-    clear(result);
+    ZZ_pX sum_poly;
+    ZZ_pX tmp_poly;
+    clear(sum_poly);
+
     for (long i = 0; i < len; i++) {
-        result += a[i] * b[i];
+        // rep() 获取 ZZ_pE 底层的 ZZ_pX 多项式表示
+        // mul() 和 add() 自动处理系数在 ZZ_p (模 2^k) 的运算
+        // 这里避开了每次相乘后昂贵的多项式取模开销
+        mul(tmp_poly, rep(a[i]), rep(b[i])); 
+        add(sum_poly, sum_poly, tmp_poly);
     }
-    return result;
+
+    // 循环结束后，仅进行一次针对定义多项式 P(x) 的模约减
+    return to_ZZ_pE(sum_poly);
 }
 
 static ZZ_pE inner_product_gr(const std::vector<ZZ_pE>& a,
@@ -269,6 +286,8 @@ BrakedownEvalProof brakedown_prove(
     long num_rows = comm.num_rows;
     long num_prox = effective_num_prox(code, num_rows);
 
+    auto t_prove_start = hrc::now();
+
     if (!code.is_small_ring) {
         // ====== Large Ring: 原有逻辑 ======
         auto combine_rows_large = [&](const std::vector<ZZ_pE>& coeffs) {
@@ -285,6 +304,7 @@ BrakedownEvalProof brakedown_prove(
             return result;
         };
 
+        auto t1 = hrc::now();
         proof.prox_coeffs.resize(num_prox);
         for (long t = 0; t < num_prox; t++) {
             proof.prox_coeffs[t].resize(num_rows);
@@ -292,15 +312,31 @@ BrakedownEvalProof brakedown_prove(
                 proof.prox_coeffs[t][i] = random_ZZ_pE();
             proof.combined_rows.push_back(combine_rows_large(proof.prox_coeffs[t]));
         }
+        auto t2 = hrc::now();
+
         auto q1_combined = combine_rows_large(q1);
+        auto t3 = hrc::now();
+
         proof.eval_value = inner_product_gr(q1_combined, q2);
+        auto t4 = hrc::now();
+
         proof.combined_rows.push_back(q1_combined);
 
+        std::cout << "  Prove breakdown (Large Ring):" << std::endl;
+        std::cout << "    num_rows=" << num_rows << " row_len=" << row_len
+                  << " num_prox=" << num_prox << " n=" << n << std::endl;
+        std::cout << "    Prox combine:    " << ms_between(t1, t2) << " ms" << std::endl;
+        std::cout << "    Q1 combine:      " << ms_between(t2, t3) << " ms" << std::endl;
+        std::cout << "    Inner product:   " << ms_between(t3, t4) << " ms" << std::endl;
+
     } else {
-        // ====== Small Ring: 在 ext ring 中做 combine ======
+        // ====== Small Ring: 使用分量独立的乘法 ======
         long pf = code.packing_factor;
         long base_r = code.base_degree;
         long packed_len = code.packed_row_len;
+
+        // 获取 base ring 的模多项式（用于分量独立乘法）
+        ZZ_pX base_mod = get_base_ring_modulus(base_r);
 
         // Step 1: 在 base ring context 下提取所有行的 ZZ_pX 系数
         switch_to_base_ring(code.base_degree);
@@ -320,8 +356,7 @@ BrakedownEvalProof brakedown_prove(
             packed_rows[i] = pack_row(all_row_polys[i], row_len, packed_len, pf, base_r);
         }
 
-        // Step 3: 在 ext ring 中做 combine (c_i 嵌入到 ext ring)
-        // 先生成 prox coeffs (在 base ring context 下)
+        // Step 3: 生成 prox coeffs (在 base ring context 下)
         switch_to_base_ring(code.base_degree);
         proof.prox_coeffs.resize(num_prox);
         std::vector<std::vector<ZZ_pX>> prox_coeffs_polys(num_prox);
@@ -340,27 +375,29 @@ BrakedownEvalProof brakedown_prove(
             q1_polys[i] = rep(q1[i]);
         }
 
-
-        // Step 4: 切到 ext ring, 做 combine_packed_rows
+        // Step 4: 切到 ext ring, 使用分量独立乘法做 combine
         switch_to_ext_ring(code.ext_degree);
 
-        auto combine_packed = [&](const std::vector<ZZ_pX>& coeff_polys) {
+        // ★ 关键修改：使用 component_wise_scalar_mul_add 代替直接乘法
+        auto combine_packed_correct = [&](const std::vector<ZZ_pX>& coeff_polys) {
             std::vector<ZZ_pE> result(packed_len);
             for (long j = 0; j < packed_len; j++) clear(result[j]);
             for (long i = 0; i < num_rows; i++) {
-                ZZ_pE c_ext = to_ZZ_pE(coeff_polys[i]); // 嵌入 ext ring
-                for (long j = 0; j < packed_len; j++) {
-                    result[j] += c_ext * packed_rows[i][j];
-                }
+                // 使用分量独立乘法：对每个分量独立乘以系数
+                component_wise_scalar_mul_add(coeff_polys[i],
+                                               packed_rows[i].data(),
+                                               result.data(),
+                                               packed_len,
+                                               pf, base_r, base_mod);
             }
             return result;
         };
 
         for (long t = 0; t < num_prox; t++) {
-            proof.combined_rows.push_back(combine_packed(prox_coeffs_polys[t]));
+            proof.combined_rows.push_back(combine_packed_correct(prox_coeffs_polys[t]));
         }
         // q1 的 combined packed row
-        proof.combined_rows.push_back(combine_packed(q1_polys));
+        proof.combined_rows.push_back(combine_packed_correct(q1_polys));
 
         // ★ 计算 eval_value: 从 combined_rows.back() unpack 后和 q2 内积
         //    必须和 Verify 的计算方式完全一致!
@@ -391,6 +428,8 @@ BrakedownEvalProof brakedown_prove(
     // Column openings (在 ext ring context 下)
     if (code.is_small_ring) switch_to_ext_ring(code.ext_degree);
 
+    auto t_col_start = hrc::now();
+
     long num_open = code.num_col_open;
     proof.column_indices.resize(num_open);
     proof.column_items.resize(num_open);
@@ -407,6 +446,12 @@ BrakedownEvalProof brakedown_prove(
         proof.column_items[t] = column;
         proof.merkle_paths[t] = get_merkle_path(comm.tree, col_idx);
     }
+
+    auto t_col_end = hrc::now();
+    auto t_prove_end = hrc::now();
+
+    std::cout << "    Column openings: " << ms_between(t_col_start, t_col_end) << " ms" << std::endl;
+    std::cout << "    Prove total:     " << ms_between(t_prove_start, t_prove_end) << " ms" << std::endl;
 
     return proof;
 }
@@ -493,10 +538,13 @@ bool brakedown_verify(
         return true;
 
     } else {
-        // ====== Small Ring ======
+        // ====== Small Ring: 使用分量独立乘法 ======
         long pf = code.packing_factor;
         long base_r = code.base_degree;
         long packed_len = code.packed_row_len;
+
+        // 获取 base ring 的模多项式
+        ZZ_pX base_mod = get_base_ring_modulus(base_r);
 
         // 1. Eval consistency
         switch_to_ext_ring(code.ext_degree);
@@ -552,6 +600,7 @@ bool brakedown_verify(
         }
 
         // 4. Column consistency (在 ext ring context 下)
+        // ★ 关键修改：使用分量独立乘法
         for (long t = 0; t < code.num_col_open; t++) {
             long col = proof.column_indices[t];
             const auto& items = proof.column_items[t];
@@ -568,9 +617,12 @@ bool brakedown_verify(
                 ZZ_pE expected;
                 clear(expected);
                 if (num_rows > 1) {
+                    // ★ 使用分量独立乘法计算 expected
                     for (long i = 0; i < num_rows; i++) {
-                        ZZ_pE c_ext = to_ZZ_pE(all_coeff_polys[s][i]);
-                        expected += c_ext * items[i];
+                        ZZ_pE product = component_wise_scalar_mul(
+                            all_coeff_polys[s][i], items[i],
+                            pf, base_r, base_mod);
+                        expected += product;
                     }
                 } else {
                     expected = items[0];

@@ -8,7 +8,6 @@
 
 // ============================================================
 // Brakedown code parameters from [GLSTW21] Figure 2
-// Ported from: SuccinctPaul/di-spartan-brakedown brakedown.rs
 // ============================================================
 
 struct BrakedownSpec {

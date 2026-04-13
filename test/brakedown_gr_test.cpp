@@ -207,7 +207,7 @@ void fair_benchmark(long k) {
          << "\n";
     cout << string(120, '-') << "\n";
 
-    long sizes[] = {4, 8, 16, 32, 64, 128, 256, 512, 1024， 2048, 4096, 8192, 16384, 32768};
+    long sizes[] = {4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768};
     for (int idx = 0; idx < 14; idx++) {
         long n = sizes[idx];
         long degree = autoExtensionDegree(n);

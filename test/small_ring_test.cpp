@@ -52,10 +52,14 @@ void test_small_ring_pcs() {
     long ext_r = pf * base_r;
     cout << "packing_factor = " << pf << ", ext_degree = " << ext_r << endl;
 
-    // 切换到 ext ring 做 code setup (只切 ZZ_pE, 不动 ZZ_p)
-    switch_ring(ext_r);
+    // ★ 小环情况下，在 base ring context 创建稀疏矩阵（系数来自 base ring）
+    // 然后切换到 ext ring 进行编码
+    switch_ring(base_r);  // 先在 base ring context 下创建稀疏矩阵
 
     BrakedownCodeGR code = brakedown_code_setup_auto(row_len, s, base_r, lambda);
+
+    // 切换到 ext ring 进行后续操作
+    switch_ring(ext_r);
     cout << "is_small_ring = " << code.is_small_ring << endl;
     cout << "packed_row_len = " << code.packed_row_len << endl;
     cout << "codeword_len = " << code.codeword_len << endl;
@@ -109,13 +113,15 @@ void test_small_ring_pcs() {
         }
     }
 
-        // 直接计算期望值: 必须和 Prove/Verify 一致
-    // 先 pack 每行到 ext ring, 在 ext ring 做 q1 线性组合, unpack 回 base ring, 再和 q2 内积
+    // 直接计算期望值: 使用分量独立乘法，必须和 Prove/Verify 一致
     ZZ_pE expected_eval;
     {
         long pf_val = code.packing_factor;
         long base_r_val = code.base_degree;
         long packed_len = code.packed_row_len;
+
+        // 获取 base ring 的模多项式
+        ZZ_pX base_mod = get_base_ring_modulus(base_r_val);
 
         // 提取所有行的 ZZ_pX (在 base ring context)
         switch_ring(base_r);
@@ -131,23 +137,32 @@ void test_small_ring_pcs() {
             q1_polys[i] = rep(q1[i]);
         }
 
-        // 切到 ext ring, pack 每行, 做 q1 线性组合
+        // 切到 ext ring, pack 每行
         switch_ring(ext_r);
-        std::vector<ZZ_pE> combined(packed_len);
-        for (long j = 0; j < packed_len; j++) clear(combined[j]);
-
+        std::vector<std::vector<ZZ_pE>> packed_rows(num_rows);
         for (long i = 0; i < num_rows; i++) {
-            // pack 第 i 行
-            std::vector<ZZ_pX> group(pf_val);
-            ZZ_pE c_ext = to_ZZ_pE(q1_polys[i]);
+            packed_rows[i].resize(packed_len);
             for (long j = 0; j < packed_len; j++) {
+                std::vector<ZZ_pX> group(pf_val);
                 for (long t = 0; t < pf_val; t++) {
                     long src = j * pf_val + t;
                     group[t] = (src < row_len) ? all_row_polys[i][src] : ZZ_pX();
                 }
-                ZZ_pE packed_elem = pack_elements_pub(group, pf_val, base_r_val);
-                combined[j] += c_ext * packed_elem;
+                packed_rows[i][j] = pack_elements_pub(group, pf_val, base_r_val);
             }
+        }
+
+        // ★ 使用分量独立乘法做 q1 线性组合
+        std::vector<ZZ_pE> combined(packed_len);
+        for (long j = 0; j < packed_len; j++) clear(combined[j]);
+
+        for (long i = 0; i < num_rows; i++) {
+            // 使用 component_wise_scalar_mul_add
+            component_wise_scalar_mul_add(q1_polys[i],
+                                           packed_rows[i].data(),
+                                           combined.data(),
+                                           packed_len,
+                                           pf_val, base_r_val, base_mod);
         }
 
         // unpack combined, 切回 base ring, 和 q2 内积

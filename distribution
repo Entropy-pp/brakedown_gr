@@ -1,0 +1,29 @@
+承诺阶段：
+- master 节点 $P_0$ 将矩阵 $U$ 按行进行划分，将 $U_i = (U[\frac{m}{n}(i)+1],...,U[\frac{m}{n}(i+1)])$ 发送给 $P_i$ 
+- 每个子证明节点 $P_i$ 进行编码得到 $\hat{U}[\frac{m}{n}(i)+1],...,\hat{U}[\frac{m}{n}(i+1)]$ ，构建 Merkle Tree 将得到的 Merkle Root ：$Root_i$ 发送给master 节点 $P_0$ 
+- master 节点 $P_0$ 聚合所有的 $Root_i$ 得到总的 $ROOT$ 发送给验证者 $V$
+
+测试阶段：
+- 验证者 $V$ 给 master 节点 $P_0$ 发送随机选取的矩阵 $R$
+- master 节点 $P_0$ 将矩阵 $R$ 按列进行划分，将 $R_j = (R[\frac{m}{n}(j)+1],...,R[\frac{m}{n}(j+1)])$ 发送给 $P_j$ 
+- 每个子证明节点 $P_j$ 计算 $V_j = R_j U_j$  并发送给master 节点 $P_0$ 
+- master 节点 $P_0$ 对 $V_j$ 进行聚合，得到 $V = \sum_{j=1}^{n} V_j$ 并发送给验证者 $V$
+- 验证者 $V$ 选取目标列集合 $Q$ ，对于 $j \in Q$ 
+	-  每个子证明节点 $P_j$ 将 $\hat{U}[\frac{m}{n}(i)+1][j],...,\hat{U}[\frac{m}{n}(i+1)][j]$ 及其 Merkle Proof 发给 master 节点 $P_0$ 。master 节点将完整的 Merkle Proof 补齐后，将所有发给验证者进行 Merkle Check
+	- 对于每一行验证者验证 $Enc(V_i)[j] =\sum_{s=1}^m R_i[s]\cdot \hat{U}_s[j]$ 承诺阶段：
+- master 节点 $P_0$ 将矩阵 $U$ 按行进行划分，将 $U_i = (U[\frac{m}{n}(i)+1],...,U[\frac{m}{n}(i+1)])$ 发送给 $P_i$ 
+- 每个子证明节点 $P_i$ 进行编码得到 $\hat{U}[\frac{m}{n}(i)+1],...,\hat{U}[\frac{m}{n}(i+1)]$ ，构建 Merkle Tree 将得到的 Merkle Root ：$Root_i$ 发送给master 节点 $P_0$ 
+- master 节点 $P_0$ 聚合所有的 $Root_i$ 得到总的 $ROOT$ 
+- master 节点 $P_0$ 将所有 $\hat{U}[i]$ 和 $ROOT$ 发送给验证者 $V$
+
+测试阶段：
+- 验证者 $V$ 给 master 节点 $P_0$ 发送随机选取的矩阵 $R$
+- master 节点 $P_0$ 将矩阵 $R$ 按列进行划分，将 $R_j = (R[\frac{m}{n}(j)+1],...,R[\frac{m}{n}(j+1)])$ 发送给 $P_j$ 
+- 每个子证明节点 $P_j$ 计算 $V_j = R_j U_j$  并发送给master 节点 $P_0$ 
+- master 节点 $P_0$ 对 $V_j$ 进行聚合，得到 $V = \sum_{j=1}^{n} V_j$ 并发送给验证者 $V$
+- 验证者 $V$ 选取目标列集合 $Q$ ，对于 $j \in Q$ 
+	-  每个子证明节点 $P_j$ 将 $\hat{U}[\frac{m}{n}(i)+1][j],...,\hat{U}[\frac{m}{n}(i+1)][j]$ 及其 Merkle Proof 发给 master 节点 $P_0$ 。master 节点将完整的 Merkle Proof 补齐后，将所有发给验证者进行 Merkle Check
+	- 对于每一行验证者验证 $Enc(V_i)[j] =\sum_{s=1}^m R_i[s]\cdot \hat{U}_s[j]$
+
+evaluation phase:
+和原来协议一样，把 R 替换成 q_1 

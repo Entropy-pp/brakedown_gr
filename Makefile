@@ -91,3 +91,16 @@ bench_brakedown: | out
 
 runbenchbrakedown: bench_brakedown
 	./$(OUTDIR)/bench_brakedown
+
+# ============================================================
+# Distributed Brakedown Benchmark
+# ============================================================
+DIST_SRCS = src/gr.cpp src/sparse_matrix_gr.cpp src/brakedown_code_gr.cpp \
+            src/merkle.cpp src/brakedown_pcs_gr.cpp src/brakedown_distributed.cpp
+
+bench_distributed: | out
+	g++ -O3 -std=c++17 -pthread -I./include test/bench_distributed.cpp $(DIST_SRCS) \
+		-o $(OUTDIR)/bench_distributed -lntl -lgmp -lm -lssl -lcrypto
+
+rundist: bench_distributed
+	./$(OUTDIR)/bench_distributed

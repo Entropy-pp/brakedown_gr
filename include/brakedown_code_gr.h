@@ -16,8 +16,13 @@ struct BrakedownCodeGR {
     long num_col_open;
     long num_prox_test;
 
+    // Large ring: 使用 ext ring 稀疏矩阵
     std::vector<SparseMatrixGR> a_mats;
     std::vector<SparseMatrixGR> b_mats;
+
+    // Small ring: 使用 base ring 系数的稀疏矩阵
+    std::vector<SparseMatrixSmallRing> a_mats_small;
+    std::vector<SparseMatrixSmallRing> b_mats_small;
 
     bool is_small_ring;
     long packing_factor;
@@ -55,5 +60,37 @@ ZZ_pE pack_elements_pub(const std::vector<ZZ_pX>& base_coeffs,
 
 std::vector<ZZ_pX> unpack_element_pub(const ZZ_pE& ext_elem,
                                        long pf, long base_r);
+
+// ============================================================
+// 小环正确乘法：将 base ring 元素乘以 packed 元素
+// 关键：对每个分量独立相乘，避免分量混合
+// ============================================================
+
+// 将 base ring 元素 (ZZ_pX, degree < base_r) 乘以 packed 元素
+// 返回新的 packed 元素，每个分量都乘以了 scalar
+// 调用前必须在 ext ring context
+ZZ_pE component_wise_scalar_mul(const ZZ_pX& scalar_poly,
+                                 const ZZ_pE& packed_elem,
+                                 long pf, long base_r,
+                                 const ZZ_pX& base_mod);
+
+// 向量版本：对 packed 向量的每个元素执行 component_wise_scalar_mul
+void component_wise_scalar_mul_vec(const ZZ_pX& scalar_poly,
+                                    const ZZ_pE* packed_vec,
+                                    ZZ_pE* result,
+                                    long vec_len,
+                                    long pf, long base_r,
+                                    const ZZ_pX& base_mod);
+
+// 累加版本：result[j] += scalar * packed_vec[j]（分量独立）
+void component_wise_scalar_mul_add(const ZZ_pX& scalar_poly,
+                                    const ZZ_pE* packed_vec,
+                                    ZZ_pE* result,
+                                    long vec_len,
+                                    long pf, long base_r,
+                                    const ZZ_pX& base_mod);
+
+// 获取 base ring 的模多项式
+ZZ_pX get_base_ring_modulus(long base_r);
 
 #endif

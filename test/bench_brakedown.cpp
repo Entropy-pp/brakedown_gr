@@ -289,7 +289,7 @@ static void print_detail(const BenchResult& r) {
 // Main
 // ============================================================
 int main() {
-    long s = 1; // p^s = 4, 即 GR(2^2, d)
+    long s = 2; // p^s = 4, 即 GR(2^2, d)
 
     // ★ ZZ_p::init 全程只调一次
     ZZ_p::init(ZZ(1) << s);
@@ -306,14 +306,13 @@ int main() {
     // ============================================================
     // Part 1: Large Ring 测试
     //   degree >= lambda → isLargeRing = true, packing_factor = 1
-    //   使用 degree = 128, lambda = 128
     // ============================================================
     cout << ">>> Part 1: Large Ring  GR(2^2, 128), lambda=128" << endl;
     print_header();
     {
-        long base_r = 162;
+        long base_r = 128;
         long lambda = 128;
-        for (long nv : {13, 14, 15, 16}) {
+        for (long nv : { 14, 15, 16}) {
             string label = "Large d=128 nv=" + to_string(nv);
             auto r = run_benchmark(label, s, base_r, lambda, nv);
             print_result(r);
@@ -323,34 +322,34 @@ int main() {
     }
     cout << endl;
 
-    // // ============================================================
-    // // Part 2: Small Ring 测试 (不同 base degree)
-    // //   degree < lambda → isLargeRing = false
-    // //   lambda = 32 (测试用低安全参数, 加速)
-    // // ============================================================
-    // cout << ">>> Part 2: Small Ring  lambda=32, 不同 base degree" << endl;
-    // print_header();
-    // {
-    //     long lambda = 32;
-    //     for (long base_r : {8, 16}) {
-    //         for (long nv : {10, 12, 14}) {
-    //             long pf = smallRingPackingFactor(base_r, lambda);
-    //             string label = "Small d=" + to_string(base_r)
-    //                 + " k=" + to_string(pf) + " nv=" + to_string(nv);
-    //             auto r = run_benchmark(label, s, base_r, lambda, nv);
-    //             print_result(r);
-    //             print_detail(r);
-    //             results.push_back(r);
-    //         }
-    //     }
-    // }
-    // cout << endl;
+    // ============================================================
+    // Part 2: Small Ring 测试 (不同 base degree)
+    //   degree < lambda → isLargeRing = false
+    //   lambda = 32 (测试用低安全参数, 加速)
+    // ============================================================
+    cout << ">>> Part 2: Small Ring  lambda=32, 不同 base degree" << endl;
+    print_header();
+    {
+        long lambda = 32;
+        for (long base_r : {8, 16}) {
+            for (long nv : {10, 12, 14}) {
+                long pf = smallRingPackingFactor(base_r, lambda);
+                string label = "Small d=" + to_string(base_r)
+                    + " k=" + to_string(pf) + " nv=" + to_string(nv);
+                auto r = run_benchmark(label, s, base_r, lambda, nv);
+                print_result(r);
+                print_detail(r);
+                results.push_back(r);
+            }
+        }
+    }
+    cout << endl;
 
     // ============================================================
     // Part 3: Small Ring 高安全参数
     //   lambda = 128, base_r = 8 → pf = 16, ext = 128
     // ============================================================
-    cout << ">>> Part 2: Small Ring  GR(2^2, 8), lambda=128 (高安全参数)" << endl;
+    cout << ">>> Part 3: Small Ring  GR(2^2, 8), lambda=128 (高安全参数)" << endl;
     print_header();
     {
         long base_r = 8;
@@ -366,43 +365,43 @@ int main() {
     }
     cout << endl;
 
-    // // ============================================================
-    // // Part 4: 固定 num_vars, 对比 Large vs Small
-    // // ============================================================
-    // cout << ">>> Part 4: Large vs Small 对比 (num_vars=14)" << endl;
-    // print_header();
-    // {
-    //     long nv = 14;
-    //     // Large: d=128, lambda=128
-    //     {
-    //         auto r = run_benchmark("Large d=128 L=128", s, 128, 128, nv);
-    //         print_result(r);
-    //         print_detail(r);
-    //         results.push_back(r);
-    //     }
-    //     // Small: d=8, lambda=32
-    //     {
-    //         auto r = run_benchmark("Small d=8 k=4 L=32", s, 8, 32, nv);
-    //         print_result(r);
-    //         print_detail(r);
-    //         results.push_back(r);
-    //     }
-    //     // Small: d=16, lambda=32
-    //     {
-    //         auto r = run_benchmark("Small d=16 k=2 L=32", s, 16, 32, nv);
-    //         print_result(r);
-    //         print_detail(r);
-    //         results.push_back(r);
-    //     }
-    //     // Small: d=8, lambda=128
-    //     {
-    //         auto r = run_benchmark("Small d=8 k=16 L=128", s, 8, 128, nv);
-    //         print_result(r);
-    //         print_detail(r);
-    //         results.push_back(r);
-    //     }
-    // }
-    // cout << endl;
+    // ============================================================
+    // Part 4: 固定 num_vars, 对比 Large vs Small
+    // ============================================================
+    cout << ">>> Part 4: Large vs Small 对比 (num_vars=14)" << endl;
+    print_header();
+    {
+        long nv = 14;
+        // Large: d=128, lambda=128
+        {
+            auto r = run_benchmark("Large d=128 L=128", s, 128, 128, nv);
+            print_result(r);
+            print_detail(r);
+            results.push_back(r);
+        }
+        // Small: d=8, lambda=32
+        {
+            auto r = run_benchmark("Small d=8 k=4 L=32", s, 8, 32, nv);
+            print_result(r);
+            print_detail(r);
+            results.push_back(r);
+        }
+        // Small: d=16, lambda=32
+        {
+            auto r = run_benchmark("Small d=16 k=2 L=32", s, 16, 32, nv);
+            print_result(r);
+            print_detail(r);
+            results.push_back(r);
+        }
+        // Small: d=8, lambda=128
+        {
+            auto r = run_benchmark("Small d=8 k=16 L=128", s, 8, 128, nv);
+            print_result(r);
+            print_detail(r);
+            results.push_back(r);
+        }
+    }
+    cout << endl;
 
     // ============================================================
     // 汇总
