@@ -19,12 +19,21 @@ static double ms_between(hrc::time_point start, hrc::time_point end) {
 // Thread-local NTL context management
 // NTL's ZZ_p and ZZ_pE use thread-local storage, so each thread
 // needs to initialize its own context.
+// primitiveIrredPoly may not be thread-safe, so we protect it.
 // ============================================================
+
+static std::mutex ntl_init_mutex;
 
 static void init_thread_context(long k, long degree) {
     ZZ modulus = ZZ(1) << k;
     ZZ_p::init(modulus);
-    ZZ_pX P = primitiveIrredPoly(degree);
+
+    ZZ_pX P;
+    {
+        // Protect primitiveIrredPoly call with mutex
+        std::lock_guard<std::mutex> lock(ntl_init_mutex);
+        P = primitiveIrredPoly(degree);
+    }
     ZZ_pE::init(P);
 }
 
@@ -263,57 +272,63 @@ BrakedownCommitment distributed_commit(
 }
 
 // ============================================================
-// Worker task: compute partial combine
+// Worker task: compute ALL partial combines (batched)
 // ============================================================
 
-struct CombineTask {
+struct BatchCombineTask {
     const ZZ_pE* poly_rows;      // Pointer to this worker's polynomial rows
-    const ZZ_pE* coeffs;         // Coefficients (same for all workers)
-    ZZ_pE* partial_result;       // Output: partial sum
-    long start_row;              // Global row index start
-    long end_row;                // Global row index end
+    const std::vector<const ZZ_pE*>* all_coeffs;  // All coefficient vectors
+    std::vector<std::vector<ZZ_pE>>* all_partial_results;  // Output: all partial sums
+    long start_row;
+    long end_row;
     long row_len;
-    long n;                      // Total polynomial size
+    long n;
     long k;
     long degree;
+    int worker_id;
+    int num_workers;             // Total number of workers (for indexing)
+    long num_combines;           // Number of combined rows to compute
 
-    // Timing: use atomic to safely record timestamps from worker thread
     std::atomic<double> start_offset_ms{0};
     std::atomic<double> end_offset_ms{0};
     hrc::time_point* global_start;
 };
 
-static void worker_combine(CombineTask* task) {
-    // Record worker start time relative to global start
+static void worker_batch_combine(BatchCombineTask* task) {
     auto worker_start = hrc::now();
     task->start_offset_ms.store(ms_between(*task->global_start, worker_start));
 
-    // Initialize NTL context for this thread
+    // Initialize NTL context ONCE for this thread
     init_thread_context(task->k, task->degree);
 
     long row_len = task->row_len;
+    int w = task->worker_id;
+    int num_workers = task->num_workers;
 
-    // Initialize partial result to zero
-    for (long j = 0; j < row_len; j++) {
-        clear(task->partial_result[j]);
-    }
+    // Process all combined rows in one go
+    for (long c = 0; c < task->num_combines; c++) {
+        // Index: combine_idx * num_workers + worker_id
+        // Partial result is already pre-allocated and zeroed
+        std::vector<ZZ_pE>& partial = (*task->all_partial_results)[c * num_workers + w];
 
-    // Compute partial sum: sum over this worker's rows
-    for (long i = task->start_row; i < task->end_row; i++) {
-        long local_i = i - task->start_row;
-        for (long j = 0; j < row_len; j++) {
-            long idx = i * row_len + j;
-            ZZ_pE val;
-            if (idx < task->n) {
-                val = task->poly_rows[local_i * row_len + j];
-            } else {
-                clear(val);
+        const ZZ_pE* coeffs = (*task->all_coeffs)[c];
+
+        // Compute partial sum (accumulate into pre-zeroed vector)
+        for (long i = task->start_row; i < task->end_row; i++) {
+            long local_i = i - task->start_row;
+            for (long j = 0; j < row_len; j++) {
+                long idx = i * row_len + j;
+                ZZ_pE val;
+                if (idx < task->n) {
+                    val = task->poly_rows[local_i * row_len + j];
+                } else {
+                    clear(val);
+                }
+                partial[j] += coeffs[i] * val;
             }
-            task->partial_result[j] += task->coeffs[i] * val;
         }
     }
 
-    // Record worker end time relative to global start
     auto worker_end = hrc::now();
     task->end_offset_ms.store(ms_between(*task->global_start, worker_end));
 }
@@ -407,90 +422,96 @@ BrakedownEvalProof distributed_prove(
     timing.distribute_ms = ms_between(t1, t2);
 
     // ============================================================
-    // Phase 2: Workers compute partial combines in parallel
+    // Phase 2: Workers compute ALL partial combines in ONE batch
+    // This avoids creating threads multiple times
     // ============================================================
     auto t3 = hrc::now();
 
-    // We need to compute (num_prox + 1) combined rows
-    // For each, we distribute the computation across workers
-
-    std::vector<std::vector<ZZ_pE>> all_combined(num_prox + 1);
+    long num_combines = num_prox + 1;
+    std::vector<std::vector<ZZ_pE>> all_combined(num_combines);
 
     // Collect all coefficient vectors
-    std::vector<const ZZ_pE*> all_coeffs(num_prox + 1);
+    std::vector<const ZZ_pE*> all_coeffs(num_combines);
     for (long t = 0; t < num_prox; t++) {
         all_coeffs[t] = proof.prox_coeffs[t].data();
     }
     all_coeffs[num_prox] = q1.data();
 
-    // Process each combined row
-    for (long c = 0; c < num_prox + 1; c++) {
-        std::vector<CombineTask> tasks(num_workers);
-        std::vector<std::vector<ZZ_pE>> partial_results(num_workers);
+    // Prepare batch tasks - each worker processes ALL combines for its rows
+    std::vector<BatchCombineTask> tasks(num_workers);
 
-        // Capture start time for this batch
-        auto t_batch_start = hrc::now();
-
+    // Pre-allocate storage for all partial results to avoid resize in threads
+    // Layout: [combine_idx * num_workers + worker_id]
+    std::vector<std::vector<ZZ_pE>> all_partial_results(num_combines * num_workers);
+    for (long c = 0; c < num_combines; c++) {
         for (int w = 0; w < num_workers; w++) {
-            long start = w * rows_per_worker;
-            long end = std::min(start + rows_per_worker, num_rows);
-            if (start >= num_rows) {
-                start = end = num_rows;
-            }
-
-            partial_results[w].resize(row_len);
-
-            tasks[w].poly_rows = &input_matrix[start * row_len];
-            tasks[w].coeffs = all_coeffs[c];
-            tasks[w].partial_result = partial_results[w].data();
-            tasks[w].start_row = start;
-            tasks[w].end_row = end;
-            tasks[w].row_len = row_len;
-            tasks[w].n = n;
-            tasks[w].k = k;
-            tasks[w].degree = degree;
-            tasks[w].global_start = &t_batch_start;
-        }
-
-        // Launch workers
-        std::vector<std::thread> threads;
-        for (int w = 0; w < num_workers; w++) {
-            if (tasks[w].start_row < tasks[w].end_row) {
-                threads.emplace_back(worker_combine, &tasks[w]);
+            all_partial_results[c * num_workers + w].resize(row_len);
+            // Initialize to zero
+            for (long j = 0; j < row_len; j++) {
+                clear(all_partial_results[c * num_workers + w][j]);
             }
         }
+    }
 
-        for (auto& t : threads) {
-            t.join();
+    for (int w = 0; w < num_workers; w++) {
+        long start = w * rows_per_worker;
+        long end = std::min(start + rows_per_worker, num_rows);
+        if (start >= num_rows) {
+            start = end = num_rows;
         }
 
-        // Aggregate partial results
+        tasks[w].poly_rows = &input_matrix[start * row_len];
+        tasks[w].all_coeffs = &all_coeffs;
+        tasks[w].all_partial_results = &all_partial_results;
+        tasks[w].start_row = start;
+        tasks[w].end_row = end;
+        tasks[w].row_len = row_len;
+        tasks[w].n = n;
+        tasks[w].k = k;
+        tasks[w].degree = degree;
+        tasks[w].worker_id = w;
+        tasks[w].num_workers = num_workers;
+        tasks[w].num_combines = num_combines;
+        tasks[w].global_start = &t3;
+    }
+
+    // Launch workers ONCE for all combines
+    std::vector<std::thread> threads;
+    for (int w = 0; w < num_workers; w++) {
+        if (tasks[w].start_row < tasks[w].end_row) {
+            threads.emplace_back(worker_batch_combine, &tasks[w]);
+        }
+    }
+
+    for (auto& t : threads) {
+        t.join();
+    }
+
+    // Aggregate all partial results
+    for (long c = 0; c < num_combines; c++) {
         all_combined[c].resize(row_len);
         for (long j = 0; j < row_len; j++) {
             clear(all_combined[c][j]);
         }
-
         for (int w = 0; w < num_workers; w++) {
+            const auto& partial = all_partial_results[c * num_workers + w];
             for (long j = 0; j < row_len; j++) {
-                all_combined[c][j] += partial_results[w][j];
+                all_combined[c][j] += partial[j];
             }
         }
+    }
 
-        // Update worker stats (only for last combined row)
-        if (c == num_prox) {
-            worker_stats.resize(num_workers);
-            for (int w = 0; w < num_workers; w++) {
-                worker_stats[w].worker_id = w;
-                worker_stats[w].rows_processed = tasks[w].end_row - tasks[w].start_row;
-                worker_stats[w].encode_ms = 0;
-                worker_stats[w].encode_start_ms = 0;
-                worker_stats[w].encode_end_ms = 0;
-                worker_stats[w].combine_start_ms = tasks[w].start_offset_ms.load();
-                worker_stats[w].combine_end_ms = tasks[w].end_offset_ms.load();
-                // Elapsed = end_offset - start_offset
-                worker_stats[w].combine_ms = worker_stats[w].combine_end_ms - worker_stats[w].combine_start_ms;
-            }
-        }
+    // Collect worker stats
+    worker_stats.resize(num_workers);
+    for (int w = 0; w < num_workers; w++) {
+        worker_stats[w].worker_id = w;
+        worker_stats[w].rows_processed = tasks[w].end_row - tasks[w].start_row;
+        worker_stats[w].encode_ms = 0;
+        worker_stats[w].encode_start_ms = 0;
+        worker_stats[w].encode_end_ms = 0;
+        worker_stats[w].combine_start_ms = tasks[w].start_offset_ms.load();
+        worker_stats[w].combine_end_ms = tasks[w].end_offset_ms.load();
+        worker_stats[w].combine_ms = worker_stats[w].combine_end_ms - worker_stats[w].combine_start_ms;
     }
 
     auto t4 = hrc::now();

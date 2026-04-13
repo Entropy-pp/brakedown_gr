@@ -254,60 +254,62 @@ int main(int argc, char* argv[]) {
     ZZ_p::init(ZZ(1) << s);
 
     // Test configurations
-    vector<long> test_nv = {12, 14, 16};
+    // vector<long> test_nv = {14,15,16};
 
-    for (long nv : test_nv) {
-        cout << "\n";
-        cout << "##############################################################\n";
-        cout << "  Test: num_vars=" << nv << " (n=" << (1L << nv) << ")\n";
-        cout << "##############################################################\n";
+    // for (long nv : test_nv) {
+    //     cout << "\n";
+    //     cout << "##############################################################\n";
+    //     cout << "  Test: num_vars=" << nv << " (n=" << (1L << nv) << ")\n";
+    //     cout << "##############################################################\n";
 
-        long n = 1L << nv;
-        long half = nv / 2;
-        long num_rows = 1L << half;
-        long row_len = 1L << (nv - half);
+    //     long n = 1L << nv;
+    //     long half = nv / 2;
+    //     long num_rows = 1L << half;
+    //     long row_len = 1L << (nv - half);
 
-        cout << "  num_rows=" << num_rows << ", row_len=" << row_len << "\n";
+    //     cout << "  num_rows=" << num_rows << ", row_len=" << row_len << "\n";
 
-        // Initialize ring
-        initGR(s, base_r);
+    //     // Initialize ring
+    //     initGR(s, base_r);
 
-        // Setup code
-        BrakedownCodeGR code = brakedown_code_setup(row_len, s, base_r);
-        cout << "  codeword_len=" << code.codeword_len << "\n";
+    //     // Setup code
+    //     BrakedownCodeGR code = brakedown_code_setup(row_len, s, base_r);
+    //     cout << "  codeword_len=" << code.codeword_len << "\n";
 
-        // Generate polynomial
-        vector<ZZ_pE> poly(n);
-        for (long i = 0; i < n; i++) {
-            poly[i] = random_ZZ_pE();
-        }
+    //     // Generate polynomial
+    //     vector<ZZ_pE> poly(n);
+    //     for (long i = 0; i < n; i++) {
+    //         poly[i] = random_ZZ_pE();
+    //     }
 
-        // Generate evaluation point
-        vector<ZZ_pE> q1(num_rows), q2(row_len);
-        for (long i = 0; i < num_rows; i++) q1[i] = random_ZZ_pE();
-        for (long j = 0; j < row_len; j++) q2[j] = random_ZZ_pE();
+    //     // Generate evaluation point
+    //     vector<ZZ_pE> q1(num_rows), q2(row_len);
+    //     for (long i = 0; i < num_rows; i++) q1[i] = random_ZZ_pE();
+    //     for (long j = 0; j < row_len; j++) q2[j] = random_ZZ_pE();
 
-        // Run single-threaded
-        cout << "\n  Running single-threaded...\n";
-        auto single_res = run_single(code, poly.data(), n, num_rows, q1, q2);
+    //     // Run single-threaded
+    //     cout << "\n  Running single-threaded...\n";
+    //     auto single_res = run_single(code, poly.data(), n, num_rows, q1, q2);
 
-        // Run distributed
-        cout << "  Running distributed (" << num_workers << " workers)...\n";
-        auto dist_res = run_distributed(code, poly.data(), n, num_rows, q1, q2, num_workers);
+    //     // Run distributed
+    //     cout << "  Running distributed (" << num_workers << " workers)...\n";
+    //     auto dist_res = run_distributed(code, poly.data(), n, num_rows, q1, q2, num_workers);
 
-        // Print comparison
-        print_comparison(single_res, dist_res);
-        print_distributed_breakdown(dist_res);
-    }
+    //     // Print comparison
+    //     print_comparison(single_res, dist_res);
+    //     print_distributed_breakdown(dist_res);
+    // }
 
     // Scalability test: vary number of workers
-    cout << "\n";
-    cout << "##############################################################\n";
-    cout << "  Scalability Test: n=2^14, varying workers\n";
-    cout << "##############################################################\n";
 
     {
         long nv = 14;
+
+        cout << "\n";
+        cout << "##############################################################\n";
+        cout << "  Scalability Test: n=2^" << nv << ", varying workers\n";
+        cout << "##############################################################\n";
+
         long n = 1L << nv;
         long half = nv / 2;
         long num_rows = 1L << half;
