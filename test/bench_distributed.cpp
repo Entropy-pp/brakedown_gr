@@ -303,7 +303,7 @@ int main(int argc, char* argv[]) {
     // Scalability test: vary number of workers
 
     {
-        long nv = 14;
+        long nv = 16;
 
         cout << "\n";
         cout << "##############################################################\n";
@@ -338,7 +338,8 @@ int main(int argc, char* argv[]) {
              << "\n";
         cout << string(67, '-') << "\n";
 
-        double single_total = single_res.commit_ms + single_res.prove_ms + single_res.verify_ms;
+        // double single_total = single_res.commit_ms + single_res.prove_ms + single_res.verify_ms;
+        double single_total = single_res.commit_ms + single_res.prove_ms;
         cout << setw(10) << "1 (base)"
              << setw(15) << single_res.commit_ms
              << setw(15) << single_res.prove_ms
@@ -349,7 +350,8 @@ int main(int argc, char* argv[]) {
         int max_workers = min((int)thread::hardware_concurrency(), 16);
         for (int w = 2; w <= max_workers; w *= 2) {
             auto dist = run_distributed(code, poly.data(), n, num_rows, q1, q2, w);
-            double total = dist.commit_timing.total_ms + dist.prove_timing.total_ms + dist.verify_ms;
+            //  double total = dist.commit_timing.total_ms + dist.prove_timing.total_ms + dist.verify_ms;
+            double total = dist.commit_timing.total_ms + dist.prove_timing.total_ms;
             double speedup = single_total / total;
 
             cout << setw(10) << w
