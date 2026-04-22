@@ -303,7 +303,7 @@ int main(int argc, char* argv[]) {
     // Scalability test: vary number of workers
 
     {
-        long nv = 16;
+        long nv = 14;
 
         cout << "\n";
         cout << "##############################################################\n";
@@ -333,6 +333,7 @@ int main(int argc, char* argv[]) {
         cout << setw(10) << "Workers"
              << setw(15) << "Commit(ms)"
              << setw(15) << "Prove(ms)"
+             << setw(15) << "Verify(ms)"
              << setw(15) << "Total(ms)"
              << setw(12) << "Speedup"
              << "\n";
@@ -343,6 +344,7 @@ int main(int argc, char* argv[]) {
         cout << setw(10) << "1 (base)"
              << setw(15) << single_res.commit_ms
              << setw(15) << single_res.prove_ms
+             << setw(15) << single_res.verify_ms
              << setw(15) << single_total
              << setw(12) << "1.00x"
              << "\n";
@@ -357,6 +359,7 @@ int main(int argc, char* argv[]) {
             cout << setw(10) << w
                  << setw(15) << dist.commit_timing.total_ms
                  << setw(15) << dist.prove_timing.total_ms
+                 << setw(15) << dist.verify_ms
                  << setw(15) << total
                  << setw(12) << (to_string(speedup).substr(0,4) + "x")
                  << "\n";

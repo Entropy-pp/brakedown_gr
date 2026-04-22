@@ -61,6 +61,14 @@ std::vector<unsigned char> hash_pair(const std::vector<unsigned char>& left,
     return sha256(combined);
 }
 
+std::vector<unsigned char> hash_M(const std::vector<std::vector<unsigned char>>& hashes) {
+    std::vector<unsigned char> combined;
+    for (const auto& h : hashes) {
+        combined.insert(combined.end(), h.begin(), h.end());
+    }
+    return sha256(combined);
+}
+
 MerkleTree build_merkle_tree(const std::vector<std::vector<unsigned char>>& leaf_hashes) {
     MerkleTree tree;
     tree.num_leaves = leaf_hashes.size();

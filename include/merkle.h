@@ -25,6 +25,10 @@ std::vector<unsigned char> hash_column(const ZZ_pE* column, long len);
 std::vector<unsigned char> hash_pair(const std::vector<unsigned char>& left,
                                      const std::vector<unsigned char>& right);
 
+// H_M: Hash M hashes together (M-ary hash function for distributed protocol)
+// h[k] = H_M(h^(0)[k], h^(1)[k], ..., h^(M-1)[k])
+std::vector<unsigned char> hash_M(const std::vector<std::vector<unsigned char>>& hashes);
+
 // Build a Merkle tree from leaf hashes
 // Returns: flat array of hashes. Layout: [leaves..., level1..., level2..., ..., root]
 // Total size: (2 << depth) - 1, where depth = ceil(log2(num_leaves))

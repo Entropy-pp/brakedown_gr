@@ -104,3 +104,23 @@ bench_distributed: | out
 
 rundist: bench_distributed
 	./$(OUTDIR)/bench_distributed
+
+# ============================================================
+# Protocol 2: Distributed Merkle Tree Benchmark
+# ============================================================
+bench_distributed_v2: | out
+	g++ -O3 -std=c++17 -pthread -I./include test/bench_distributed_v2.cpp $(DIST_SRCS) \
+		-o $(OUTDIR)/bench_distributed_v2 -lntl -lgmp -lm -lssl -lcrypto
+
+rundistv2: bench_distributed_v2
+	./$(OUTDIR)/bench_distributed_v2
+
+# ============================================================
+# Final Protocol 2 Scalability Benchmark
+# ============================================================
+bench_final: | out
+	g++ -O3 -std=c++17 -pthread -I./include test/bench_final.cpp $(DIST_SRCS) \
+		-o $(OUTDIR)/bench_final -lntl -lgmp -lm -lssl -lcrypto
+
+runfinal: bench_final
+	./$(OUTDIR)/bench_final

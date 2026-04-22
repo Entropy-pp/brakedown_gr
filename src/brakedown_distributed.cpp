@@ -579,3 +579,686 @@ BrakedownEvalProof distributed_prove(
     std::vector<WorkerStats> stats;
     return distributed_prove(code, comm, poly_coeffs, n, q1, q2, num_workers, timing, stats);
 }
+
+// ============================================================
+// Protocol 2: Distributed Commit with Distributed Merkle Tree
+// ============================================================
+
+// Worker task for V2: encode rows AND compute local column hashes
+struct EncodeAndHashTask {
+    const BrakedownCodeGR* code;
+    const ZZ_pE* input_rows;
+    ZZ_pE* output_rows;                          // Encoded rows output
+    std::vector<std::vector<unsigned char>>* local_hashes;  // h^(i)[k] for all columns k
+    long start_row;
+    long end_row;
+    long row_len;
+    long codeword_len;
+    long k;
+    long degree;
+    int worker_id;
+
+    std::atomic<double> encode_end_ms{0};
+    std::atomic<double> hash_end_ms{0};
+    hrc::time_point* global_start;
+};
+
+static void worker_encode_and_hash(EncodeAndHashTask* task) {
+    auto worker_start = hrc::now();
+
+    // Initialize NTL context
+    init_thread_context(task->k, task->degree);
+
+    long row_len = task->row_len;
+    long cw_len = task->codeword_len;
+    long num_local_rows = task->end_row - task->start_row;
+
+    // Phase 1: Encode all rows
+    for (long i = task->start_row; i < task->end_row; i++) {
+        long local_i = i - task->start_row;
+
+        // Copy input to output buffer
+        for (long j = 0; j < row_len; j++) {
+            task->output_rows[local_i * cw_len + j] = task->input_rows[local_i * row_len + j];
+        }
+        for (long j = row_len; j < cw_len; j++) {
+            clear(task->output_rows[local_i * cw_len + j]);
+        }
+        brakedown_encode(*task->code, &task->output_rows[local_i * cw_len]);
+    }
+
+    auto encode_end = hrc::now();
+    task->encode_end_ms.store(ms_between(*task->global_start, encode_end));
+
+    // Phase 2: Compute local column hashes h^(i)[k] for all columns k
+    // h^(i)[k] = H(Û^(i)_{*,k}) - hash of worker i's portion of column k
+    task->local_hashes->resize(cw_len);
+    for (long col = 0; col < cw_len; col++) {
+        // Extract this worker's portion of column col
+        std::vector<ZZ_pE> col_portion(num_local_rows);
+        for (long local_i = 0; local_i < num_local_rows; local_i++) {
+            col_portion[local_i] = task->output_rows[local_i * cw_len + col];
+        }
+        (*task->local_hashes)[col] = hash_column(col_portion.data(), num_local_rows);
+    }
+
+    auto hash_end = hrc::now();
+    task->hash_end_ms.store(ms_between(*task->global_start, hash_end));
+}
+
+// Worker task for V2 Phase 2: Global hash aggregation + local Merkle tree
+struct AggregateAndMerkleTask {
+    const std::vector<std::vector<std::vector<unsigned char>>>* all_worker_hashes;  // [worker][col] -> hash
+    std::vector<std::vector<unsigned char>>* global_hashes;  // Output: h[k] for assigned columns
+    MerkleTree* local_tree;                                   // Output: local Merkle tree
+    long col_start;
+    long col_end;
+    int num_workers;
+    int worker_id;
+    long k;
+    long degree;
+
+    std::atomic<double> aggregate_end_ms{0};
+    std::atomic<double> merkle_end_ms{0};
+    hrc::time_point* global_start;
+};
+
+static void worker_aggregate_and_merkle(AggregateAndMerkleTask* task) {
+    // Initialize NTL context (may be needed for some operations)
+    init_thread_context(task->k, task->degree);
+
+    long num_cols = task->col_end - task->col_start;
+
+    // Phase 1: Aggregate hashes with H_M
+    // h[k] = H_M(h^(0)[k], h^(1)[k], ..., h^(M-1)[k])
+    task->global_hashes->resize(num_cols);
+    for (long col = task->col_start; col < task->col_end; col++) {
+        long local_col = col - task->col_start;
+
+        // Collect all workers' hashes for this column
+        std::vector<std::vector<unsigned char>> col_hashes(task->num_workers);
+        for (int w = 0; w < task->num_workers; w++) {
+            col_hashes[w] = (*task->all_worker_hashes)[w][col];
+        }
+
+        // H_M aggregation
+        (*task->global_hashes)[local_col] = hash_M(col_hashes);
+    }
+
+    auto aggregate_end = hrc::now();
+    task->aggregate_end_ms.store(ms_between(*task->global_start, aggregate_end));
+
+    // Phase 2: Build local Merkle tree over assigned global hashes
+    *task->local_tree = build_merkle_tree(*task->global_hashes);
+
+    auto merkle_end = hrc::now();
+    task->merkle_end_ms.store(ms_between(*task->global_start, merkle_end));
+}
+
+DistributedCommitmentV2 distributed_commit_v2(
+    const BrakedownCodeGR& code,
+    const ZZ_pE* poly_coeffs,
+    long n,
+    long num_rows,
+    int num_workers,
+    DistributedCommitTimingV2& timing,
+    std::vector<WorkerStatsV2>& worker_stats)
+{
+    auto t_total_start = hrc::now();
+
+    DistributedCommitmentV2 comm;
+    comm.num_rows = num_rows;
+    comm.codeword_len = code.codeword_len;
+    comm.num_workers = num_workers;
+    long row_len = code.row_len;
+    long cw_len = code.codeword_len;
+
+    long k = NumBits(ZZ_p::modulus()) - 1;
+    long degree = ZZ_pE::degree();
+
+    // Prepare input matrix
+    std::vector<ZZ_pE> input_matrix(num_rows * row_len);
+    for (long i = 0; i < num_rows; i++) {
+        for (long j = 0; j < row_len; j++) {
+            long idx = i * row_len + j;
+            if (idx < n) {
+                input_matrix[i * row_len + j] = poly_coeffs[idx];
+            } else {
+                clear(input_matrix[i * row_len + j]);
+            }
+        }
+    }
+
+    // ============================================================
+    // Phase 1: Workers encode rows AND compute local column hashes
+    // ============================================================
+    auto t1 = hrc::now();
+
+    long rows_per_worker = (num_rows + num_workers - 1) / num_workers;
+
+    std::vector<EncodeAndHashTask> encode_tasks(num_workers);
+    std::vector<std::vector<ZZ_pE>> worker_outputs(num_workers);
+    std::vector<std::vector<std::vector<unsigned char>>> all_worker_hashes(num_workers);
+
+    for (int w = 0; w < num_workers; w++) {
+        long start = w * rows_per_worker;
+        long end = std::min(start + rows_per_worker, num_rows);
+        if (start >= num_rows) {
+            start = end = num_rows;
+        }
+
+        long worker_rows = end - start;
+        worker_outputs[w].resize(worker_rows * cw_len);
+
+        encode_tasks[w].code = &code;
+        encode_tasks[w].input_rows = &input_matrix[start * row_len];
+        encode_tasks[w].output_rows = worker_outputs[w].data();
+        encode_tasks[w].local_hashes = &all_worker_hashes[w];
+        encode_tasks[w].start_row = start;
+        encode_tasks[w].end_row = end;
+        encode_tasks[w].row_len = row_len;
+        encode_tasks[w].codeword_len = cw_len;
+        encode_tasks[w].k = k;
+        encode_tasks[w].degree = degree;
+        encode_tasks[w].worker_id = w;
+        encode_tasks[w].global_start = &t1;
+    }
+
+    std::vector<std::thread> threads;
+    for (int w = 0; w < num_workers; w++) {
+        if (encode_tasks[w].start_row < encode_tasks[w].end_row) {
+            threads.emplace_back(worker_encode_and_hash, &encode_tasks[w]);
+        }
+    }
+    for (auto& t : threads) {
+        t.join();
+    }
+
+    auto t2 = hrc::now();
+    timing.local_encode_ms = 0;
+    timing.local_hash_ms = 0;
+    for (int w = 0; w < num_workers; w++) {
+        timing.local_encode_ms = std::max(timing.local_encode_ms, encode_tasks[w].encode_end_ms.load());
+        timing.local_hash_ms = std::max(timing.local_hash_ms,
+            encode_tasks[w].hash_end_ms.load() - encode_tasks[w].encode_end_ms.load());
+    }
+
+    // Collect encoded rows into comm (still needed for prove phase)
+    comm.encoded_rows.resize(num_rows * cw_len);
+    for (int w = 0; w < num_workers; w++) {
+        long start = encode_tasks[w].start_row;
+        long end = encode_tasks[w].end_row;
+        for (long i = start; i < end; i++) {
+            long local_i = i - start;
+            for (long j = 0; j < cw_len; j++) {
+                comm.encoded_rows[i * cw_len + j] = worker_outputs[w][local_i * cw_len + j];
+            }
+        }
+    }
+
+    // ============================================================
+    // Phase 2: Hash exchange (simulated - in real distributed system,
+    // workers would exchange hashes for their assigned columns)
+    // ============================================================
+    auto t3 = hrc::now();
+    timing.hash_exchange_ms = ms_between(t2, t3);  // Simulated as zero-time in shared memory
+
+    // ============================================================
+    // Phase 3: Global hash aggregation + local Merkle tree construction
+    // Each worker is responsible for cw_len/num_workers columns
+    // ============================================================
+    auto t4 = hrc::now();
+
+    long cols_per_worker = (cw_len + num_workers - 1) / num_workers;
+
+    std::vector<AggregateAndMerkleTask> agg_tasks(num_workers);
+    std::vector<std::vector<std::vector<unsigned char>>> worker_global_hashes(num_workers);
+    comm.local_trees.resize(num_workers);
+
+    for (int w = 0; w < num_workers; w++) {
+        long col_start = w * cols_per_worker;
+        long col_end = std::min(col_start + cols_per_worker, cw_len);
+        if (col_start >= cw_len) {
+            col_start = col_end = cw_len;
+        }
+
+        agg_tasks[w].all_worker_hashes = &all_worker_hashes;
+        agg_tasks[w].global_hashes = &worker_global_hashes[w];
+        agg_tasks[w].local_tree = &comm.local_trees[w];
+        agg_tasks[w].col_start = col_start;
+        agg_tasks[w].col_end = col_end;
+        agg_tasks[w].num_workers = num_workers;
+        agg_tasks[w].worker_id = w;
+        agg_tasks[w].k = k;
+        agg_tasks[w].degree = degree;
+        agg_tasks[w].global_start = &t4;
+    }
+
+    threads.clear();
+    for (int w = 0; w < num_workers; w++) {
+        if (agg_tasks[w].col_start < agg_tasks[w].col_end) {
+            threads.emplace_back(worker_aggregate_and_merkle, &agg_tasks[w]);
+        }
+    }
+    for (auto& t : threads) {
+        t.join();
+    }
+
+    auto t5 = hrc::now();
+    timing.global_hash_ms = 0;
+    timing.local_merkle_ms = 0;
+    for (int w = 0; w < num_workers; w++) {
+        timing.global_hash_ms = std::max(timing.global_hash_ms, agg_tasks[w].aggregate_end_ms.load());
+        timing.local_merkle_ms = std::max(timing.local_merkle_ms,
+            agg_tasks[w].merkle_end_ms.load() - agg_tasks[w].aggregate_end_ms.load());
+    }
+
+    // Collect global column hashes (needed for proof verification)
+    comm.global_column_hashes.resize(cw_len);
+    for (int w = 0; w < num_workers; w++) {
+        long col_start = w * cols_per_worker;
+        long col_end = std::min(col_start + cols_per_worker, cw_len);
+        for (long col = col_start; col < col_end; col++) {
+            comm.global_column_hashes[col] = worker_global_hashes[w][col - col_start];
+        }
+    }
+
+    // ============================================================
+    // Phase 4: Global commitment
+    // MC(Û) = H(r_0, r_1, ..., r_{M-1})
+    // ============================================================
+    auto t6 = hrc::now();
+
+    comm.local_roots.resize(num_workers);
+    for (int w = 0; w < num_workers; w++) {
+        comm.local_roots[w] = comm.local_trees[w].root;
+    }
+
+    // Final root = H(r_0, r_1, ..., r_{M-1})
+    comm.root = hash_M(comm.local_roots);
+
+    auto t7 = hrc::now();
+    timing.global_commit_ms = ms_between(t6, t7);
+
+    auto t_total_end = hrc::now();
+    timing.total_ms = ms_between(t_total_start, t_total_end);
+
+    // Collect worker stats
+    worker_stats.resize(num_workers);
+    for (int w = 0; w < num_workers; w++) {
+        worker_stats[w].worker_id = w;
+        worker_stats[w].rows_processed = encode_tasks[w].end_row - encode_tasks[w].start_row;
+        worker_stats[w].cols_processed = agg_tasks[w].col_end - agg_tasks[w].col_start;
+        worker_stats[w].encode_ms = encode_tasks[w].encode_end_ms.load();
+        worker_stats[w].local_hash_ms = encode_tasks[w].hash_end_ms.load() - encode_tasks[w].encode_end_ms.load();
+        worker_stats[w].global_hash_ms = agg_tasks[w].aggregate_end_ms.load();
+        worker_stats[w].local_merkle_ms = agg_tasks[w].merkle_end_ms.load() - agg_tasks[w].aggregate_end_ms.load();
+    }
+
+    return comm;
+}
+
+// Convenience overload
+DistributedCommitmentV2 distributed_commit_v2(
+    const BrakedownCodeGR& code,
+    const ZZ_pE* poly_coeffs,
+    long n,
+    long num_rows,
+    int num_workers)
+{
+    DistributedCommitTimingV2 timing;
+    std::vector<WorkerStatsV2> stats;
+    return distributed_commit_v2(code, poly_coeffs, n, num_rows, num_workers, timing, stats);
+}
+
+// ============================================================
+// Protocol 2: Distributed Prove Implementation
+// ============================================================
+
+DistributedEvalProofV2 distributed_prove_v2(
+    const BrakedownCodeGR& code,
+    const DistributedCommitmentV2& comm,
+    const ZZ_pE* poly_coeffs,
+    long n,
+    const std::vector<ZZ_pE>& q1,
+    const std::vector<ZZ_pE>& q2,
+    int num_workers,
+    DistributedProveTiming& timing,
+    std::vector<WorkerStats>& worker_stats)
+{
+    auto t_total_start = hrc::now();
+
+    DistributedEvalProofV2 proof;
+    long row_len = code.row_len;
+    long num_rows = comm.num_rows;
+    long cw_len = comm.codeword_len;
+    long num_prox = effective_num_prox_dist(code, num_rows);
+
+    long k = NumBits(ZZ_p::modulus()) - 1;
+    long degree = ZZ_pE::degree();
+
+    if (code.is_small_ring) {
+        std::cerr << "distributed_prove_v2: small ring not yet supported" << std::endl;
+        return proof;
+    }
+
+    // ============================================================
+    // Phase 1: Distribute data to workers (same as V1)
+    // ============================================================
+    auto t1 = hrc::now();
+
+    std::vector<ZZ_pE> input_matrix(num_rows * row_len);
+    for (long i = 0; i < num_rows; i++) {
+        for (long j = 0; j < row_len; j++) {
+            long idx = i * row_len + j;
+            if (idx < n) {
+                input_matrix[i * row_len + j] = poly_coeffs[idx];
+            } else {
+                clear(input_matrix[i * row_len + j]);
+            }
+        }
+    }
+
+    long rows_per_worker = (num_rows + num_workers - 1) / num_workers;
+
+    proof.prox_coeffs.resize(num_prox);
+    for (long t = 0; t < num_prox; t++) {
+        proof.prox_coeffs[t].resize(num_rows);
+        for (long i = 0; i < num_rows; i++) {
+            proof.prox_coeffs[t][i] = random_ZZ_pE();
+        }
+    }
+
+    auto t2 = hrc::now();
+    timing.distribute_ms = ms_between(t1, t2);
+
+    // ============================================================
+    // Phase 2: Workers compute partial combines (same as V1)
+    // ============================================================
+    auto t3 = hrc::now();
+
+    long num_combines = num_prox + 1;
+    std::vector<std::vector<ZZ_pE>> all_combined(num_combines);
+
+    std::vector<const ZZ_pE*> all_coeffs(num_combines);
+    for (long t = 0; t < num_prox; t++) {
+        all_coeffs[t] = proof.prox_coeffs[t].data();
+    }
+    all_coeffs[num_prox] = q1.data();
+
+    std::vector<BatchCombineTask> tasks(num_workers);
+    std::vector<std::vector<ZZ_pE>> all_partial_results(num_combines * num_workers);
+
+    for (long c = 0; c < num_combines; c++) {
+        for (int w = 0; w < num_workers; w++) {
+            all_partial_results[c * num_workers + w].resize(row_len);
+            for (long j = 0; j < row_len; j++) {
+                clear(all_partial_results[c * num_workers + w][j]);
+            }
+        }
+    }
+
+    for (int w = 0; w < num_workers; w++) {
+        long start = w * rows_per_worker;
+        long end = std::min(start + rows_per_worker, num_rows);
+        if (start >= num_rows) {
+            start = end = num_rows;
+        }
+
+        tasks[w].poly_rows = &input_matrix[start * row_len];
+        tasks[w].all_coeffs = &all_coeffs;
+        tasks[w].all_partial_results = &all_partial_results;
+        tasks[w].start_row = start;
+        tasks[w].end_row = end;
+        tasks[w].row_len = row_len;
+        tasks[w].n = n;
+        tasks[w].k = k;
+        tasks[w].degree = degree;
+        tasks[w].worker_id = w;
+        tasks[w].num_workers = num_workers;
+        tasks[w].num_combines = num_combines;
+        tasks[w].global_start = &t3;
+    }
+
+    std::vector<std::thread> threads;
+    for (int w = 0; w < num_workers; w++) {
+        if (tasks[w].start_row < tasks[w].end_row) {
+            threads.emplace_back(worker_batch_combine, &tasks[w]);
+        }
+    }
+    for (auto& t : threads) {
+        t.join();
+    }
+
+    for (long c = 0; c < num_combines; c++) {
+        all_combined[c].resize(row_len);
+        for (long j = 0; j < row_len; j++) {
+            clear(all_combined[c][j]);
+        }
+        for (int w = 0; w < num_workers; w++) {
+            const auto& partial = all_partial_results[c * num_workers + w];
+            for (long j = 0; j < row_len; j++) {
+                all_combined[c][j] += partial[j];
+            }
+        }
+    }
+
+    worker_stats.resize(num_workers);
+    for (int w = 0; w < num_workers; w++) {
+        worker_stats[w].worker_id = w;
+        worker_stats[w].rows_processed = tasks[w].end_row - tasks[w].start_row;
+        worker_stats[w].encode_ms = 0;
+        worker_stats[w].encode_start_ms = 0;
+        worker_stats[w].encode_end_ms = 0;
+        worker_stats[w].combine_start_ms = tasks[w].start_offset_ms.load();
+        worker_stats[w].combine_end_ms = tasks[w].end_offset_ms.load();
+        worker_stats[w].combine_ms = worker_stats[w].combine_end_ms - worker_stats[w].combine_start_ms;
+    }
+
+    auto t4 = hrc::now();
+    timing.combine_ms = ms_between(t3, t4);
+
+    // ============================================================
+    // Phase 3: Collect combined rows and compute eval
+    // ============================================================
+    auto t5 = hrc::now();
+
+    for (long c = 0; c < num_prox; c++) {
+        proof.combined_rows.push_back(all_combined[c]);
+    }
+    proof.eval_value = inner_product_dist(all_combined[num_prox].data(), q2.data(), row_len);
+    proof.combined_rows.push_back(all_combined[num_prox]);
+
+    auto t6 = hrc::now();
+    timing.collect_ms = ms_between(t5, t6);
+
+    // ============================================================
+    // Phase 4: Column openings with distributed Merkle proof
+    // For Protocol 2, we need:
+    //   - Column values from all workers
+    //   - Merkle path within the responsible worker's local tree
+    //   - All local roots r_j for final verification
+    // ============================================================
+    auto t7 = hrc::now();
+
+    long num_open = code.num_col_open;
+    long cols_per_worker = (cw_len + comm.num_workers - 1) / comm.num_workers;
+
+    proof.column_indices.resize(num_open);
+    proof.column_items.resize(num_open);
+    proof.merkle_paths.resize(num_open);
+
+    // Store all local roots (needed for verification)
+    proof.all_local_roots = comm.local_roots;
+
+    for (long t = 0; t < num_open; t++) {
+        long col_idx = RandomBnd(cw_len);
+        proof.column_indices[t] = col_idx;
+
+        // Collect full column from encoded_rows
+        std::vector<ZZ_pE> column(num_rows);
+        for (long row = 0; row < num_rows; row++) {
+            column[row] = comm.encoded_rows[row * cw_len + col_idx];
+        }
+        proof.column_items[t] = column;
+
+        // Find which worker owns this column
+        int owner_worker = col_idx / cols_per_worker;
+        if (owner_worker >= comm.num_workers) {
+            owner_worker = comm.num_workers - 1;
+        }
+
+        // Get local index within that worker's tree
+        long local_col_idx = col_idx - owner_worker * cols_per_worker;
+
+        // Get Merkle path within that worker's local tree
+        proof.merkle_paths[t] = get_merkle_path(comm.local_trees[owner_worker], local_col_idx);
+    }
+
+    auto t8 = hrc::now();
+    timing.column_open_ms = ms_between(t7, t8);
+
+    auto t_total_end = hrc::now();
+    timing.total_ms = ms_between(t_total_start, t_total_end);
+
+    return proof;
+}
+
+// Convenience overload
+DistributedEvalProofV2 distributed_prove_v2(
+    const BrakedownCodeGR& code,
+    const DistributedCommitmentV2& comm,
+    const ZZ_pE* poly_coeffs,
+    long n,
+    const std::vector<ZZ_pE>& q1,
+    const std::vector<ZZ_pE>& q2,
+    int num_workers)
+{
+    DistributedProveTiming timing;
+    std::vector<WorkerStats> stats;
+    return distributed_prove_v2(code, comm, poly_coeffs, n, q1, q2, num_workers, timing, stats);
+}
+
+// ============================================================
+// Protocol 2: Distributed Verify Implementation
+// ============================================================
+
+bool distributed_verify_v2(
+    const BrakedownCodeGR& code,
+    const DistributedCommitmentV2& comm,
+    const DistributedEvalProofV2& proof,
+    const std::vector<ZZ_pE>& q1,
+    const std::vector<ZZ_pE>& q2)
+{
+    long row_len = code.row_len;
+    long cw_len = code.codeword_len;
+    long num_rows = comm.num_rows;
+    long num_prox = effective_num_prox_dist(code, num_rows);
+    int num_workers = comm.num_workers;
+    long rows_per_worker = (num_rows + num_workers - 1) / num_workers;
+    long cols_per_worker = (cw_len + num_workers - 1) / num_workers;
+
+    if (code.is_small_ring) {
+        std::cerr << "distributed_verify_v2: small ring not yet supported" << std::endl;
+        return false;
+    }
+
+    // ============================================================
+    // Step 1: Verify final root = H(r_0, ..., r_{M-1})
+    // ============================================================
+    std::vector<unsigned char> computed_root = hash_M(proof.all_local_roots);
+    if (computed_root != comm.root) {
+        std::cerr << "distributed_verify_v2: root mismatch" << std::endl;
+        return false;
+    }
+
+    // ============================================================
+    // Step 2: Verify evaluation
+    // ============================================================
+    const auto& combined_q1 = proof.combined_rows.back();
+    ZZ_pE computed_eval = inner_product_dist(combined_q1.data(), q2.data(), row_len);
+    if (computed_eval != proof.eval_value) {
+        std::cerr << "distributed_verify_v2: eval mismatch" << std::endl;
+        return false;
+    }
+
+    // ============================================================
+    // Step 3: Re-encode combined rows
+    // ============================================================
+    std::vector<std::vector<ZZ_pE>> encoded_combined(proof.combined_rows.size());
+    for (size_t t = 0; t < proof.combined_rows.size(); t++) {
+        encoded_combined[t].resize(cw_len);
+        for (long j = 0; j < row_len; j++) {
+            encoded_combined[t][j] = proof.combined_rows[t][j];
+        }
+        for (long j = row_len; j < cw_len; j++) {
+            clear(encoded_combined[t][j]);
+        }
+        brakedown_encode(code, encoded_combined[t].data());
+    }
+
+    // ============================================================
+    // Step 4: Verify column openings with distributed Merkle proof
+    // ============================================================
+
+    // Build coefficient vectors for proximity tests
+    std::vector<std::vector<ZZ_pE>> coeffs(proof.combined_rows.size());
+    for (long t = 0; t < num_prox; t++) {
+        coeffs[t] = proof.prox_coeffs[t];
+    }
+    coeffs[num_prox] = q1;
+
+    for (size_t idx = 0; idx < proof.column_indices.size(); idx++) {
+        long col = proof.column_indices[idx];
+        const auto& column = proof.column_items[idx];
+        const auto& merkle_path = proof.merkle_paths[idx];
+
+        // Step 4a: Recompute local hashes h^(i)[col] for each worker
+        std::vector<std::vector<unsigned char>> local_hashes(num_workers);
+        for (int w = 0; w < num_workers; w++) {
+            long start = w * rows_per_worker;
+            long end = std::min(start + rows_per_worker, num_rows);
+            long worker_rows = end - start;
+
+            // Extract this worker's portion of the column
+            std::vector<ZZ_pE> col_portion(worker_rows);
+            for (long i = 0; i < worker_rows; i++) {
+                col_portion[i] = column[start + i];
+            }
+            local_hashes[w] = hash_column(col_portion.data(), worker_rows);
+        }
+
+        // Step 4b: Aggregate h[col] = H_M(h^(0)[col], ..., h^(M-1)[col])
+        std::vector<unsigned char> global_hash = hash_M(local_hashes);
+
+        // Step 4c: Find owner worker and verify Merkle path
+        int owner_worker = col / cols_per_worker;
+        if (owner_worker >= num_workers) {
+            owner_worker = num_workers - 1;
+        }
+        long local_col_idx = col - owner_worker * cols_per_worker;
+
+        // Verify path from h[col] to r_{owner_worker}
+        if (!verify_merkle_path(global_hash, local_col_idx, merkle_path,
+                                proof.all_local_roots[owner_worker])) {
+            std::cerr << "distributed_verify_v2: Merkle path failed for column " << col << std::endl;
+            return false;
+        }
+
+        // Step 4d: Column consistency check
+        // Check: encoded_combined[s][col] == sum of coeffs[s][i] * column[i]
+        for (size_t s = 0; s < proof.combined_rows.size(); s++) {
+            ZZ_pE expected;
+            clear(expected);
+            for (long i = 0; i < num_rows; i++) {
+                expected += column[i] * coeffs[s][i];
+            }
+            if (encoded_combined[s][col] != expected) {
+                std::cerr << "distributed_verify_v2: column consistency failed" << std::endl;
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
