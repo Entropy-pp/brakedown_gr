@@ -124,3 +124,13 @@ bench_final: | out
 
 runfinal: bench_final
 	./$(OUTDIR)/bench_final
+
+# ============================================================
+# Soundness Test
+# ============================================================
+test_soundness: | out
+	g++ -O3 -std=c++17 -pthread -I./include test/test_soundness.cpp $(DIST_SRCS) \
+		-o $(OUTDIR)/test_soundness -lntl -lgmp -lm -lssl -lcrypto
+
+runsoundness: test_soundness
+	./$(OUTDIR)/test_soundness
