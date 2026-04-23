@@ -191,6 +191,7 @@ void print_v2_breakdown(const V2Result& res) {
     cout << "--- Protocol 2 Prove Breakdown ---\n";
     cout << "  Distribute data:  " << res.prove_timing.distribute_ms << " ms\n";
     cout << "  Parallel combine: " << res.prove_timing.combine_ms << " ms\n";
+    cout << "  Tree reduction:   " << res.prove_timing.tree_reduce_ms << " ms\n";
     cout << "  Collect/aggregate:" << res.prove_timing.collect_ms << " ms\n";
     cout << "  Column openings:  " << res.prove_timing.column_open_ms << " ms\n";
     cout << "  Total:            " << res.prove_timing.total_ms << " ms\n";

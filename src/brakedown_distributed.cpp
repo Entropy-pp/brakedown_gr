@@ -533,6 +533,7 @@ BrakedownEvalProof distributed_prove(
 
     auto t6 = hrc::now();
     timing.collect_ms = ms_between(t5, t6);
+    timing.tree_reduce_ms = 0;  // V1 doesn't use tree reduction
 
     // ============================================================
     // Phase 4: Column openings
@@ -912,6 +913,106 @@ DistributedCommitmentV2 distributed_commit_v2(
 }
 
 // ============================================================
+// Tree Reduction for aggregating partial results
+// ============================================================
+
+// Task for one round of tree reduction
+struct TreeReduceTask {
+    std::vector<std::vector<ZZ_pE>>* partial_results;  // [combine_idx * num_workers + worker_id]
+    int src_worker;      // Worker to receive from
+    int dst_worker;      // Worker to accumulate into
+    int num_workers;
+    long num_combines;
+    long row_len;
+    long k;
+    long degree;
+    hrc::time_point* global_start;
+};
+
+static void worker_tree_reduce(TreeReduceTask* task) {
+    // Initialize NTL context
+    init_thread_context(task->k, task->degree);
+
+    int src = task->src_worker;
+    int dst = task->dst_worker;
+    long row_len = task->row_len;
+
+    // For each combine, add src's result to dst's result
+    for (long c = 0; c < task->num_combines; c++) {
+        auto& dst_partial = (*task->partial_results)[c * task->num_workers + dst];
+        const auto& src_partial = (*task->partial_results)[c * task->num_workers + src];
+
+        for (long j = 0; j < row_len; j++) {
+            dst_partial[j] += src_partial[j];
+        }
+    }
+}
+
+// Perform tree reduction on partial results
+// Returns timing for the reduction phase
+static double tree_reduce_partial_results(
+    std::vector<std::vector<ZZ_pE>>& all_partial_results,
+    int num_workers,
+    long num_combines,
+    long row_len,
+    long k,
+    long degree)
+{
+    auto t_start = hrc::now();
+
+    // Find e such that 2^e >= num_workers
+    int e = 0;
+    int padded_workers = 1;
+    while (padded_workers < num_workers) {
+        padded_workers <<= 1;
+        e++;
+    }
+
+    // Tree reduction: e rounds
+    // Round k (1-indexed): for i < 2^{e-k}, P_i += P_{i + 2^{e-k}}
+    for (int round = 1; round <= e; round++) {
+        int stride = 1 << (e - round);  // 2^{e-k}
+        int active_workers = 1 << (e - round);  // Number of receiving workers
+
+        std::vector<TreeReduceTask> tasks;
+        std::vector<std::thread> threads;
+
+        for (int i = 0; i < active_workers; i++) {
+            int dst = i;
+            int src = i + stride;
+
+            // Skip if src is beyond actual workers
+            if (src >= num_workers) continue;
+            // Skip if dst is beyond actual workers (shouldn't happen)
+            if (dst >= num_workers) continue;
+
+            TreeReduceTask task;
+            task.partial_results = &all_partial_results;
+            task.src_worker = src;
+            task.dst_worker = dst;
+            task.num_workers = num_workers;
+            task.num_combines = num_combines;
+            task.row_len = row_len;
+            task.k = k;
+            task.degree = degree;
+            task.global_start = &t_start;
+            tasks.push_back(task);
+        }
+
+        // Launch threads for this round
+        for (auto& task : tasks) {
+            threads.emplace_back(worker_tree_reduce, &task);
+        }
+        for (auto& t : threads) {
+            t.join();
+        }
+    }
+
+    auto t_end = hrc::now();
+    return ms_between(t_start, t_end);
+}
+
+// ============================================================
 // Protocol 2: Distributed Prove Implementation
 // ============================================================
 
@@ -1030,17 +1131,19 @@ DistributedEvalProofV2 distributed_prove_v2(
         t.join();
     }
 
+    auto t4 = hrc::now();
+    timing.combine_ms = ms_between(t3, t4);
+
+    // ============================================================
+    // Phase 2.5: Tree Reduction for aggregating partial results
+    // Instead of master collecting all, use tree-based reduction
+    // ============================================================
+    timing.tree_reduce_ms = tree_reduce_partial_results(
+        all_partial_results, num_workers, num_combines, row_len, k, degree);
+
+    // After tree reduction, results are in worker 0's slots
     for (long c = 0; c < num_combines; c++) {
-        all_combined[c].resize(row_len);
-        for (long j = 0; j < row_len; j++) {
-            clear(all_combined[c][j]);
-        }
-        for (int w = 0; w < num_workers; w++) {
-            const auto& partial = all_partial_results[c * num_workers + w];
-            for (long j = 0; j < row_len; j++) {
-                all_combined[c][j] += partial[j];
-            }
-        }
+        all_combined[c] = std::move(all_partial_results[c * num_workers + 0]);
     }
 
     worker_stats.resize(num_workers);
@@ -1054,9 +1157,6 @@ DistributedEvalProofV2 distributed_prove_v2(
         worker_stats[w].combine_end_ms = tasks[w].end_offset_ms.load();
         worker_stats[w].combine_ms = worker_stats[w].combine_end_ms - worker_stats[w].combine_start_ms;
     }
-
-    auto t4 = hrc::now();
-    timing.combine_ms = ms_between(t3, t4);
 
     // ============================================================
     // Phase 3: Collect combined rows and compute eval

@@ -28,6 +28,7 @@ struct DistributedCommitTiming {
 struct DistributedProveTiming {
     double distribute_ms;      // Master: distribute data to workers
     double combine_ms;         // Workers: parallel combine (max across workers)
+    double tree_reduce_ms;     // Tree reduction aggregation
     double collect_ms;         // Master: collect and aggregate
     double column_open_ms;     // Master: column openings
     double total_ms;
